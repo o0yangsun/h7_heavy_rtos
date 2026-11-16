@@ -1,0 +1,53 @@
+# Build output
+build/
+cmake-build-debug/
+cmake-build-release/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Compiled objects
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+*.d
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Libraries
+*.a
+*.lib
+
+# Debug / local scripts
+openocd.cfg
+*.launch
+*.gdb
+*.log
+
+# Backup
+*.bak
+*.bak_*
+*.orig
+*.rej
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI / editor tool data
+.codebuddy/
+.claude/
+.mcp.json
+
+# Keep the build entry script
+!build.bat
