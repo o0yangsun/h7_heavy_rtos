@@ -56,6 +56,9 @@ static volatile uint32_t s_busoff_count = 0;    /* bus-off 次数 */
 /* bus-off 处理：ISR 只置标志，任务中恢复，恢复后冷却 500ms */
 static volatile uint8_t s_busoff_pending[3] = {0};
 
+/** 非电机帧的转发钩子，由上层模块注册 */
+static dj_motor_rx_hook_t s_rx_hook = NULL;
+
 static bool             s_bus_dead[3]      = {false};
 static uint32_t         s_bus_retry_ms[3]  = {0};
 
@@ -238,6 +241,12 @@ static void decode_feedback(dj_motor_object_t *motor, const uint8_t *data)
     ms->speed_rpm  = (int16_t)(((uint16_t)data[2] << 8) | data[3]);
     ms->real_current = (int16_t)(((uint16_t)data[4] << 8) | data[5]);
     ms->temperature  = data[6];
+
+    /* 一阶平滑：编码器转速为 1 rpm 量化，微分项会把它放大成电流抖动 */
+    ms->speed_rpm_f = (1.0f - DJ_SPEED_SMOOTH_COEF) * ms->speed_rpm_f
+                    + DJ_SPEED_SMOOTH_COEF * (float)ms->speed_rpm;
+    ms->real_current_f = (1.0f - DJ_CURRENT_SMOOTH_COEF) * ms->real_current_f
+                       + DJ_CURRENT_SMOOTH_COEF * (float)ms->real_current;
 
     ms->angle_single_round = (float)ms->ecd * (360.0f / 8192.0f);
 
@@ -628,6 +637,11 @@ void dj_motor_rx_dispatch(uint8_t bus, uint32_t std_id, const uint8_t *data)
     s_rx_count[bus - 1U]++;
 }
 
+void dj_motor_set_rx_hook(dj_motor_rx_hook_t hook)
+{
+    s_rx_hook = hook;
+}
+
 /* ------------------------------- 统计量接口 -------------------------------- */
 
 uint32_t dj_motor_get_tx_count(void)
@@ -710,6 +724,10 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 
             if (header.DataLength == FDCAN_DLC_BYTES_8)
             {
+                if (s_rx_hook != NULL)
+                {
+                    s_rx_hook(bus, header.Identifier, data);
+                }
                 dj_motor_rx_dispatch(bus, header.Identifier, data);
             }
         }

@@ -50,7 +50,7 @@ else ()
     add_compile_options(-Og -g)
 endif ()
 
-include_directories(Core/Inc USB_DEVICE/App USB_DEVICE/Target Drivers/STM32H7xx_HAL_Driver/Inc Drivers/STM32H7xx_HAL_Driver/Inc/Legacy Middlewares/ST/STM32_USB_Device_Library/Core/Inc Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc Drivers/CMSIS/Device/ST/STM32H7xx/Include Drivers/CMSIS/Include Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F Middlewares/ST/ARM/DSP/Inc USER USER/Module/Motor/DJ_Motor USER/Module/Log USER/Task USER/Task/Motor USER/Task/Gimbal USER/Task/Chassis USER/Task/Ins USER/Task/Cmd USER/Task/Usart USER/Task/Transmission USER/Task/Referee USER/Task/Power USER/Task/Special USER/Task/Shoot USER/Module/Board USER/Algorithm/PID USER/Task/Robot_Config USER/Algorithm/User_Lib USER/Algorithm/CRC USER/Module/Rc/Dbus)
+include_directories(Core/Inc USB_DEVICE/App USB_DEVICE/Target Drivers/STM32H7xx_HAL_Driver/Inc Drivers/STM32H7xx_HAL_Driver/Inc/Legacy Middlewares/ST/STM32_USB_Device_Library/Core/Inc Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc Drivers/CMSIS/Device/ST/STM32H7xx/Include Drivers/CMSIS/Include Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F Middlewares/ST/ARM/DSP/Inc USER USER/Module/Motor/DJ_Motor USER/Module/Log USER/Task USER/Task/Motor USER/Task/Gimbal USER/Task/Chassis USER/Task/Ins USER/Task/Cmd USER/Task/Usart USER/Task/Transmission USER/Task/Referee USER/Task/Power USER/Task/Special USER/Task/Shoot USER/Module/Board USER/Algorithm/PID USER/Task/Robot_Config USER/Algorithm/User_Lib USER/Algorithm/CRC USER/Module/Rc/Dbus USER/Module/Sensor/INA226 USER/Module/Time USER/Module/Sensor/BMI088 USER/Algorithm/Filter USER/Algorithm/QuaternionEKF USER/Algorithm/Ramp)
 
 add_definitions(-DDEBUG -DUSE_PWR_LDO_SUPPLY -DUSE_HAL_DRIVER -DSTM32H723xx)
 
@@ -63,6 +63,9 @@ add_link_options(-mcpu=cortex-m7 -mthumb -mthumb-interwork)
 add_link_options(-T ${LINKER_SCRIPT})
 
 add_executable(${PROJECT_NAME}.elf ${SOURCES} ${LINKER_SCRIPT})
+
+# 姿态解算使用 sqrtf/atan2f 等，需要 newlib 的 libm
+target_link_libraries(${PROJECT_NAME}.elf m)
 
 set(HEX_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.hex)
 set(BIN_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.bin)

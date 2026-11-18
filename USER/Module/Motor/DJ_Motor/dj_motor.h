@@ -45,12 +45,19 @@ typedef enum
     DJ_CTRL_RUN,            /**< 正常调用控制回调 */
 } dj_ctrl_mode_e;
 
+/* 反馈一阶平滑系数，取值 (0,1]，等于 1 时关闭滤波。
+ * 转速为 1 rpm 量化，直接进微分项会被放大成电流抖动 */
+#define DJ_SPEED_SMOOTH_COEF        0.85f
+#define DJ_CURRENT_SMOOTH_COEF      0.90f
+
 /** 单电机反馈数据 */
 typedef struct
 {
     uint16_t ecd;                   /**< 机械角 0~8191 */
-    int16_t  speed_rpm;             /**< 转子转速 rpm（已一阶滤波） */
+    int16_t  speed_rpm;             /**< 转子转速 rpm，原始值 */
+    float    speed_rpm_f;           /**< 一阶平滑后的转速 rpm，供速度环使用 */
     int16_t  real_current;          /**< 3508: 实际电流值; 6020: 转矩电流 */
+    float    real_current_f;        /**< 一阶平滑后的电流 */
     uint8_t  temperature;           /**< 温度 ℃ */
     int16_t  last_ecd;              /**< 上一帧 ecd，用于多圈累加 */
     int32_t  total_round;           /**< 多圈计数 */
@@ -159,6 +166,18 @@ bool dj_motor_send_std(uint8_t bus, uint32_t std_id, const uint8_t *data);
  * @param data   8 字节数据
  */
 void dj_motor_rx_dispatch(uint8_t bus, uint32_t std_id, const uint8_t *data);
+
+/**
+ * @brief 非电机帧转发钩子，在电机分发之前调用
+ * @param bus    1/2/3
+ * @param std_id 标准帧 ID
+ * @param data   8 字节数据
+ * @note  钩子在中断上下文执行，只做解析和置标志，不要阻塞。
+ */
+typedef void (*dj_motor_rx_hook_t)(uint8_t bus, uint32_t std_id, const uint8_t *data);
+
+/** 注册转发钩子，传 NULL 取消 */
+void dj_motor_set_rx_hook(dj_motor_rx_hook_t hook);
 
 /* ------------------------------ 统计量（台架验证用） ------------------------------ */
 

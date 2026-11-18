@@ -17,6 +17,8 @@
 #include "user_lib.h"
 #include "cmsis_os.h"
 #include "main.h"
+#include "supercap_task.h"
+#include "ina226.h"
 
 #include <string.h>
 
@@ -32,11 +34,41 @@ static float       s_buffer = POWER_BUFFER_MAX_J * 0.5f;
 
 /**
  * @brief 读一次母线电压和电流
- * @return 1 = 读成功
- * @note  TODO 接入 INA226 后在此读取实际值
+ * @return 1 = 读成功，0 = 无数据
+ * @note  优先 INA226 实测；没有 INA226 时用超电上报的底盘功率反算电流。
  */
 static uint8_t power_read_bus(float *voltage, float *current)
 {
+    float v = 0.0f;
+    float i = 0.0f;
+
+    g_power_diag.src = 0U;
+
+#if ENABLE_INA226
+    if (ina226_read(&v, &i) != 0U)
+    {
+        g_power_diag.src = 1U;
+        *voltage = v;
+        *current = i;
+        return 1U;
+    }
+#endif
+
+#if ENABLE_SUPERCAP
+    {
+        uint16_t w = supercap_get_chassis_power_w();
+
+        if (w > 0U)
+        {
+            v = (float)g_supercap_fdb.bat_voltage_v;
+            g_power_diag.src = 2U;
+            *voltage = v;
+            *current = (v > 1.0f) ? ((float)w / v) : 0.0f;
+            return 1U;
+        }
+    }
+#endif
+
     *voltage = 0.0f;
     *current = 0.0f;
     return 0U;
@@ -67,9 +99,17 @@ void StartPowerTask(void const *argument)
     s_scale  = 1.0f;
     s_buffer = POWER_BUFFER_MAX_J * 0.5f;
 
-    log_printf("[PWR] up: %uHz, ina226=%d limit=%.0fW\r\n",
+#if ENABLE_INA226
+    ina226_init();
+#endif
+
+#if ENABLE_SUPERCAP
+    supercap_init();
+#endif
+
+    log_printf("[PWR] up: %uHz, ina226=%d supercap=%d limit=%.0fW\r\n",
                (unsigned)(1000U / POWER_PERIOD_MS),
-               (int)ENABLE_INA226, (double)POWER_LIMIT_W);
+               (int)ENABLE_INA226, (int)ENABLE_SUPERCAP, (double)POWER_LIMIT_W);
 
     for (;;)
     {
@@ -79,6 +119,11 @@ void StartPowerTask(void const *argument)
 
         task_stat_begin(&s_stat, now);
         last_ms = now;
+
+#if ENABLE_SUPERCAP
+        /* 超电收发与在线判定，发送周期等于本线程周期 */
+        supercap_update();
+#endif
 
         /* 采样 */
         if (power_read_bus(&v, &i) == 0U)
@@ -91,22 +136,29 @@ void StartPowerTask(void const *argument)
         /* 能量缓冲 */
         if (dt > 0.0f)
         {
-            if (p > 0.0f)
+            if (g_power_diag.src == 0U)
+            {
+                /* 无有效采样：不知道真实功率，不压底盘，缓冲按满功率回充 */
+                s_buffer += POWER_LIMIT_W * dt;
+                s_buffer = float_constrain(s_buffer, 0.0f, POWER_BUFFER_MAX_J);
+                s_scale  = 1.0f;
+            }
+            else
             {
                 s_buffer += (POWER_LIMIT_W - p) * dt;
                 s_buffer = float_constrain(s_buffer, 0.0f, POWER_BUFFER_MAX_J);
-            }
 
-            if (s_buffer <= 0.0f)
-            {
-                /* 缓冲见底：按超出的比例压功率，最低压到 30% */
-                float over = (p > POWER_LIMIT_W) ? (POWER_LIMIT_W / p) : 1.0f;
-                s_scale = float_constrain(over, 0.3f, 1.0f);
-                g_power_diag.over_cnt++;
-            }
-            else if (s_buffer >= (POWER_BUFFER_MAX_J * 0.9f))
-            {
-                s_scale = 1.0f;
+                if (s_buffer <= 0.0f)
+                {
+                    /* 缓冲见底：按超出的比例压功率，最低压到 30% */
+                    float over = (p > POWER_LIMIT_W) ? (POWER_LIMIT_W / p) : 1.0f;
+                    s_scale = float_constrain(over, 0.3f, 1.0f);
+                    g_power_diag.over_cnt++;
+                }
+                else if (s_buffer >= (POWER_BUFFER_MAX_J * 0.9f))
+                {
+                    s_scale = 1.0f;
+                }
             }
         }
 
@@ -117,15 +169,26 @@ void StartPowerTask(void const *argument)
         g_power_diag.power_w   = p;
         g_power_diag.buffer_j  = s_buffer;
         g_power_diag.scale     = s_scale;
+#if ENABLE_SUPERCAP
+        g_power_diag.cap_online  = g_supercap_fdb.online;
+        g_power_diag.cap_energy  = g_supercap_fdb.energy_pct;
+        g_power_diag.cap_power_w = (float)g_supercap_fdb.cap_power_w;
+        g_power_diag.cap_chassis_w = g_supercap_fdb.chassis_power_w;
+#endif
 
 #if ENABLE_DIAG_POWER
         if ((now - last_print) >= 1000U)
         {
             last_print = now;
-            /* INA226 未接入时 i2c_err 会持续增长 */
-            log_printf("[PWR] %.1fV %.2fA %.0fW buf=%.1f scale=%.2f err=%lu\r\n",
+            /* err 增长说明两路数据源都没有有效采样 */
+            log_printf("[PWR] src=%u %.1fV %.2fA %.0fW buf=%.1f scale=%.2f err=%lu "
+                       "cap=%u %u%% %dW\r\n",
+                       (unsigned)g_power_diag.src,
                        (double)v, (double)i, (double)p, (double)s_buffer,
-                       (double)s_scale, g_power_diag.i2c_err);
+                       (double)s_scale, g_power_diag.i2c_err,
+                       (unsigned)g_power_diag.cap_online,
+                       (unsigned)g_power_diag.cap_energy,
+                       (int)g_power_diag.cap_power_w);
         }
 #endif
 

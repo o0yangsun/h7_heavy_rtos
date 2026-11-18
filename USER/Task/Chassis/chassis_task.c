@@ -37,29 +37,14 @@ static volatile float         s_cmd_vy = 0.0f;
 static volatile float         s_cmd_vw = 0.0f;
 static chassis_fdb_t          s_fdb;
 static volatile uint8_t       s_bench_stage = 0U;
-static const float            s_wheel_sign[CHS_WHEEL_NUM] = CHS_WHEEL_SIGN;
-static const uint8_t          s_wheel_id[CHS_WHEEL_NUM]   = CHS_WHEEL_ID;
-static const float            s_vw_sign[CHS_WHEEL_NUM]    = CHS_WHEEL_VW_SIGN;
 
-/* 麦轮逆解系数，顺序 ID1~ID4：vx / vy / vw 对轮速的贡献 */
-typedef struct
-{
-    float vx;
-    float vy;
-    float vw;
-} chs_kin_t;
-
-static const chs_kin_t s_kin[CHS_WHEEL_NUM] =
-{
-    {+1.0f, -1.0f, -1.0f},     /* ID1 左前 */
-    {+1.0f, +1.0f, +1.0f},     /* ID2 右前 */
-    {+1.0f, -1.0f, +1.0f},     /* ID3 右后 */
-    {+1.0f, +1.0f, -1.0f},     /* ID4 左后 */
-};
+/* 四轮 ID、安装方向、运动学系数，顺序 ID1~ID4 */
+static const chs_wheel_cfg_t  s_wheel_cfg[CHS_WHEEL_NUM] = CHS_WHEEL_CFG;
 
 /* ------------------------------- 内部函数声明 ------------------------------ */
 
 static void  chassis_motor_init(void);
+static void  chassis_kin_selfcheck(void);
 static void  chassis_update_fdb(void);
 static void  mecanum_calc(float vx, float vy, float vw, float *out_rpm);
 static void  mecanum_odom(const float *rpm, float *vx, float *vy, float *vw);
@@ -124,10 +109,11 @@ void StartChassisTask(void const *argument)
     for (i = 0; i < CHS_WHEEL_NUM; i++)
     {
         memset(&s_wheel[i], 0, sizeof(s_wheel[i]));
-        s_wheel[i].sign = s_wheel_sign[i];
+        s_wheel[i].sign = s_wheel_cfg[i].sign;
     }
 
     chassis_motor_init();
+    chassis_kin_selfcheck();
 
     {
         uint8_t ok = 1U;
@@ -160,7 +146,7 @@ void StartChassisTask(void const *argument)
 
         s_bench_stage = 0U;
 
-        /* 从 CmdTask 取指令；失能或遥控掉线时进入 RELAX 并清零速度 */
+        /* 从 CmdTask 取指令；遥控掉线时锁死，主动失能时放开 */
 #if CHASSIS_CMD_FROM_CMD_TASK
         {
             cmd_chassis_t c;
@@ -168,8 +154,17 @@ void StartChassisTask(void const *argument)
 
             cmd_get_chassis(&c);
 
-            if ((c.online == 0U) || (c.mode == CMD_MODE_RELAX))
+            if (c.online == 0U)
             {
+                /* 上电未接管：速度环目标 0 但保持出力，外力转不动轮子 */
+                s_mode   = CHASSIS_MODE_STOP;
+                s_cmd_vx = 0.0f;
+                s_cmd_vy = 0.0f;
+                s_cmd_vw = 0.0f;
+            }
+            else if (c.mode == CMD_MODE_RELAX)
+            {
+                /* 操作手主动失能：清零积分，轮子可以自由转动 */
                 s_mode   = CHASSIS_MODE_RELAX;
                 s_cmd_vx = 0.0f;
                 s_cmd_vy = 0.0f;
@@ -177,7 +172,7 @@ void StartChassisTask(void const *argument)
             }
             else
             {
-                /* 功率限幅：INA226 没接时 power_get_scale() 恒为 1.0 */
+                /* 功率限幅：PowerTask 按能量缓冲给出 0.3~1.0 的缩放比，无采样时为 1.0 */
                 scale = power_get_scale();
                 if (scale < 0.0f) { scale = 0.0f; }
                 if (scale > 1.0f) { scale = 1.0f; }
@@ -333,7 +328,10 @@ static void chassis_motor_init(void)
         pid_config_t cfg = (pid_config_t)INIT_PID_CONFIG(
             CHS_SPEED_KP, CHS_SPEED_KI, CHS_SPEED_KD,
             CHS_SPEED_MAX, CHS_SPEED_MAX,
-            PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement);
+            PID_Trapezoid_Intergral | PID_Integral_Limit
+            | PID_Derivative_On_Measurement | PID_DerivativeFilter);
+
+        cfg.Derivative_LPF_RC = CHS_SPEED_D_LPF_RC;
 
         dj_motor_config_t mcfg;
 
@@ -342,7 +340,7 @@ static void chassis_motor_init(void)
         memset(&mcfg, 0, sizeof(mcfg));
         mcfg.type    = DJ_MOTOR_M3508;
         mcfg.bus     = CAN_CHASSIS;
-        mcfg.id      = s_wheel_id[i];
+        mcfg.id      = s_wheel_cfg[i].id;
         mcfg.control = wheel_ctrl_cb;
         mcfg.ctx     = &s_wheel[i];
         s_wheel[i].motor = dj_motor_register(&mcfg);
@@ -356,18 +354,38 @@ static void chassis_motor_init(void)
  *
  * 轮序：0 左前，1 右前，2 右后，3 左后
  * S = LENGTH_A + LENGTH_B，乘 60*19/周长 换算为 rpm。
+ * 任一目标转速超过 CHS_MAX_WHEEL_RPM 时四轮等比缩放，保持合成方向不变。
  */
 static void mecanum_calc(float vx, float vy, float vw, float *out_rpm)
 {
     const float s = CHS_LENGTH_A + CHS_LENGTH_B;
     const float k = 60.0f / (CHS_WHEEL_PERIMETER * CHS_GEAR_RATIO);
+    float peak = 0.0f;
     uint8_t i;
 
     for (i = 0; i < CHS_WHEEL_NUM; i++)
     {
-        out_rpm[i] = (vx * s_kin[i].vx
-                    + vy * s_kin[i].vy
-                    + vw * s * s_kin[i].vw * s_vw_sign[i]) * k;
+        float rpm = (vx * s_wheel_cfg[i].kx
+                   + vy * s_wheel_cfg[i].ky
+                   + vw * s * s_wheel_cfg[i].kw) * k;
+        float mag = (rpm < 0.0f) ? -rpm : rpm;
+
+        out_rpm[i] = rpm;
+
+        if (mag > peak)
+        {
+            peak = mag;
+        }
+    }
+
+    if (peak > CHS_MAX_WHEEL_RPM)
+    {
+        const float gain = CHS_MAX_WHEEL_RPM / peak;
+
+        for (i = 0; i < CHS_WHEEL_NUM; i++)
+        {
+            out_rpm[i] *= gain;
+        }
     }
 }
 
@@ -385,14 +403,74 @@ static void mecanum_odom(const float *rpm, float *vx, float *vy, float *vw)
 
     for (i = 0; i < CHS_WHEEL_NUM; i++)
     {
-        sx += rpm[i] * s_kin[i].vx;
-        sy += rpm[i] * s_kin[i].vy;
-        sw += rpm[i] * s_kin[i].vw * s_vw_sign[i];
+        sx += rpm[i] * s_wheel_cfg[i].kx;
+        sy += rpm[i] * s_wheel_cfg[i].ky;
+        sw += rpm[i] * s_wheel_cfg[i].kw;
     }
 
     *vx = sx * 0.25f * k;
     *vy = sy * 0.25f * k;
     *vw = sw * 0.25f * k / s;
+}
+
+/**
+ * @brief 解算自检，上电时执行一次
+ * @note  逆解->正解应还原输入；满杆输入必须被缩放到 CHS_MAX_WHEEL_RPM
+ */
+static void chassis_kin_selfcheck(void)
+{
+    const float vx = 500.0f;
+    const float vy = 200.0f;
+    const float vw = 0.5f;
+    const float tol_v = 1.0f;
+    const float tol_w = 0.01f;
+    float rpm[CHS_WHEEL_NUM];
+    float rpm_lim[CHS_WHEEL_NUM];
+    float rx = 0.0f;
+    float ry = 0.0f;
+    float rw = 0.0f;
+    float peak = 0.0f;
+    float ex;
+    float ey;
+    float ew;
+    uint8_t i;
+
+    mecanum_calc(vx, vy, vw, rpm);
+    mecanum_odom(rpm, &rx, &ry, &rw);
+
+    ex = (rx > vx) ? (rx - vx) : (vx - rx);
+    ey = (ry > vy) ? (ry - vy) : (vy - ry);
+    ew = (rw > vw) ? (rw - vw) : (vw - rw);
+
+    if ((ex > tol_v) || (ey > tol_v) || (ew > tol_w))
+    {
+        log_printf("[CHS] kin FAIL vx=%.1f/%.1f vy=%.1f/%.1f vw=%.3f/%.3f\r\n",
+                   (double)rx, (double)vx, (double)ry, (double)vy,
+                   (double)rw, (double)vw);
+        return;
+    }
+
+    mecanum_calc(CHS_MAX_VX, 0.0f, CHS_MAX_VW, rpm_lim);
+
+    for (i = 0; i < CHS_WHEEL_NUM; i++)
+    {
+        float mag = (rpm_lim[i] < 0.0f) ? -rpm_lim[i] : rpm_lim[i];
+
+        if (mag > peak)
+        {
+            peak = mag;
+        }
+    }
+
+    if ((peak > (CHS_MAX_WHEEL_RPM + 1.0f)) || (peak < (CHS_MAX_WHEEL_RPM - 1.0f)))
+    {
+        log_printf("[CHS] limit FAIL peak=%.0f max=%.0f\r\n",
+                   (double)peak, (double)CHS_MAX_WHEEL_RPM);
+    }
+    else
+    {
+        log_printf("[CHS] kin ok, limit=%.0f rpm\r\n", (double)CHS_MAX_WHEEL_RPM);
+    }
 }
 
 /**
@@ -417,7 +495,7 @@ static int16_t wheel_ctrl_cb(const dj_motor_measure_t *m, void *ctx)
     }
 
     /* sign 同时修正反馈和输出，避免只反输出导致速度环正反馈 */
-    w->act_rpm = (float)m->speed_rpm * w->sign;
+    w->act_rpm = m->speed_rpm_f * w->sign;
 
     if (s_mode == CHASSIS_MODE_RELAX)
     {
@@ -426,7 +504,37 @@ static int16_t wheel_ctrl_cb(const dj_motor_measure_t *m, void *ctx)
         return 0;
     }
 
+    if (s_mode == CHASSIS_MODE_STOP)
+    {
+        /* 电刹：静止时清积分避免噪声累积出力，被外力推动时才抵抗 */
+        if (fabsf(w->act_rpm) < CHS_LOCK_IDLE_RPM)
+        {
+            pid_clear(w->pid_speed);
+            w->out = 0;
+            return 0;
+        }
+    }
+
     out = pid_calculate(w->pid_speed, w->act_rpm, w->ref_rpm);
+
+    /* 静摩擦补偿：仅当输出与目标同向且幅值不足时补到最小有效值，
+     * 反向输出说明已经超速，必须保留给 PID 去刹车 */
+    if (w->ref_rpm > 0.5f)
+    {
+        if ((out >= 0.0f) && (out < CHS_SPEED_MIN_OUT)
+            && (w->act_rpm < CHS_SPEED_STATIC_RPM))
+        {
+            out = CHS_SPEED_MIN_OUT;
+        }
+    }
+    else if (w->ref_rpm < -0.5f)
+    {
+        if ((out <= 0.0f) && (out > -CHS_SPEED_MIN_OUT)
+            && (w->act_rpm > -CHS_SPEED_STATIC_RPM))
+        {
+            out = -CHS_SPEED_MIN_OUT;
+        }
+    }
 
     w->out = (int16_t)(out * w->sign);
 

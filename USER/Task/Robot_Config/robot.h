@@ -8,14 +8,17 @@
 #ifndef ROBOT_H
 #define ROBOT_H
 
+#include <stdint.h>
+
 /* ------------------------------ CAN 总线分配 ------------------------------ */
 /* CAN1：底盘 4 个麦轮
- * CAN2：yaw 电机、拨弹电机、特化机构电机
+ * CAN2：yaw 电机、拨弹电机、特化机构电机、超级电容
  * CAN3：pitch 电机、3 个摩擦轮电机 */
 #define CAN_CHASSIS                 1U
 #define CAN_YAW                     2U
 #define CAN_TRIGGER                 2U
 #define CAN_SPECIAL                 2U
+#define CAN_SUPERCAP                2U
 #define CAN_PITCH                   3U
 #define CAN_FRICTION                3U
 
@@ -37,16 +40,32 @@
 #define CHS_WHEEL_ID_FR             2U
 #define CHS_WHEEL_ID_RR             3U
 #define CHS_WHEEL_ID_RL             4U
-#define CHS_WHEEL_ID                {CHS_WHEEL_ID_FL, CHS_WHEEL_ID_FR, \
-                                     CHS_WHEEL_ID_RR, CHS_WHEEL_ID_RL}
 
-/* 按 ID 顺序的方向修正：ID1、ID2、ID3、ID4
- * ID1/ID2 装反，输出和速度反馈同时取反 */
-#define CHS_WHEEL_SIGN              {-1.0f, -1.0f, 1.0f, 1.0f}
+/* 单轮电机转速上限，正解与限幅都用它 */
+#define CHS_MAX_WHEEL_RPM           9000.0f
 
-/* 自转分量逐轮方向修正，顺序 ID1~ID4，标准麦轮全部为 +1
- * 实测 ID2、ID4 纯自转方向与期望相反，取 -1；只作用于 vw，不影响 vx/vy */
-#define CHS_WHEEL_VW_SIGN           {+1.0f, -1.0f, +1.0f, -1.0f}
+/* 单轮配置：电机 ID、安装方向、运动学系数
+ * sign   安装方向修正，同时作用于速度反馈和电流输出
+ * kx/ky/kw  vx/vy/vw 对该轮转速的贡献，kw 已含逐轮自转修正 */
+typedef struct
+{
+    uint8_t id;
+    float   sign;
+    float   kx;
+    float   ky;
+    float   kw;
+} chs_wheel_cfg_t;
+
+/* 顺序 ID1~ID4：左前、右前、右后、左后。
+ * ID1/ID2 装反取 -1；ID2/ID4 纯自转方向与期望相反，kw 相应取 -1。
+ * 改了任意一行都要重新确认前进、平移、自转三个方向。 */
+#define CHS_WHEEL_CFG                                                       \
+{                                                                           \
+    {CHS_WHEEL_ID_FL, -1.0f, +1.0f, -1.0f, -1.0f},  /* ID1 左前 */          \
+    {CHS_WHEEL_ID_FR, -1.0f, +1.0f, +1.0f, -1.0f},  /* ID2 右前 */          \
+    {CHS_WHEEL_ID_RR, +1.0f, +1.0f, -1.0f, +1.0f},  /* ID3 右后 */          \
+    {CHS_WHEEL_ID_RL, +1.0f, +1.0f, +1.0f, +1.0f},  /* ID4 左后 */          \
+}
 
 #define CHS_MAX_VX                  5000.0f     /* mm/s */
 #define CHS_MAX_VY                  5000.0f     /* mm/s */
@@ -54,9 +73,17 @@
 
 /* 底盘速度环 */
 #define CHS_SPEED_KP                3.0f
-#define CHS_SPEED_KI                0.0f
-#define CHS_SPEED_KD                0.1f
+#define CHS_SPEED_KI                2.0f
+/* 微分增益不宜过大：1 ms 周期下 Kd/dt = 1000*Kd，会把转速噪声放大成电流抖动 */
+#define CHS_SPEED_KD                0.02f
+#define CHS_SPEED_D_LPF_RC          0.005f      /* 微分一阶低通时间常数，秒 */
 #define CHS_SPEED_MAX               16384.0f
+/* 静摩擦补偿：有目标时输出的最小幅值，低于此值车轮启不动 */
+#define CHS_SPEED_MIN_OUT           600.0f
+/* 低于该转速视为堵转，才施加最小输出补偿 */
+#define CHS_SPEED_STATIC_RPM        30.0f
+/* 电刹模式下转速低于此值即认为静止，清积分避免噪声累积 */
+#define CHS_LOCK_IDLE_RPM           3.0f
 
 /* 底盘台架测试 */
 #define CHS_BENCH_WHEEL_RPM         800.0f
@@ -127,11 +154,27 @@
 
 /* -------------------------------- 功率参数 -------------------------------- */
 #define POWER_PERIOD_MS             10U
-#define POWER_LIMIT_W               80.0f
+#define POWER_LIMIT_W               50.0f
 #define POWER_BUFFER_MAX_J          60.0f
 
 /* -------------------------------- 姿态参数 -------------------------------- */
 #define INS_PERIOD_MS               1U
+
+/* IMU 安装矩阵：机体坐标 x 前、y 左、z 上，把芯片坐标旋转到机体坐标。
+ * 默认按芯片与机体同向贴装取单位阵，换装或贴反时按实际方向改写。 */
+#define INS_MOUNT_MATRIX                    \
+{                                           \
+    {+1.0f,  0.0f,  0.0f},                  \
+    { 0.0f, +1.0f,  0.0f},                  \
+    { 0.0f,  0.0f, +1.0f},                  \
+}
+
+/* EKF 参数，与 hero 工程一致 */
+#define INS_EKF_Q1                  10.0f       /* 四元数过程噪声 */
+#define INS_EKF_Q2                  0.001f      /* 零偏过程噪声 */
+#define INS_EKF_R                   1000000.0f  /* 加速度量测噪声 */
+#define INS_EKF_LAMBDA              1.0f        /* 渐消因子 */
+#define INS_EKF_ACC_LPF             0.0f        /* 加速度低通时间常数，秒 */
 
 /* -------------------------------- 裁判参数 -------------------------------- */
 #define REFEREE_PERIOD_MS           10U

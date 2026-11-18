@@ -24,6 +24,11 @@ typedef struct
     float    scale;         /**< 功率比例 0~1 */
     uint32_t over_cnt;
     uint32_t i2c_err;
+    uint8_t  src;           /**< 0 = 无数据，1 = INA226，2 = 超电上报 */
+    uint8_t  cap_online;    /**< 超电在线 */
+    uint8_t  cap_energy;    /**< 超电剩余能量 % */
+    float    cap_power_w;   /**< 超电功率 W，有符号 */
+    uint16_t cap_chassis_w; /**< 超电上报的底盘功率 W */
 } power_diag_t;
 
 extern volatile power_diag_t g_power_diag;
