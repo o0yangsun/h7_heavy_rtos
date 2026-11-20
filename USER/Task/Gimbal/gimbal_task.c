@@ -12,6 +12,7 @@
 #include "robot.h"
 #include "robot_config.h"
 #include "user_lib.h"
+#include "ins_task.h"
 #include "cmsis_os.h"
 
 #include <math.h>
@@ -23,6 +24,8 @@
 #define AXIS_PITCH              1U
 #define AXIS_COUNT              2U
 
+#define GIM_RAD2DEG             57.2957795f
+
 /* --------------------------------- 内部状态 -------------------------------- */
 
 typedef struct
@@ -31,7 +34,9 @@ typedef struct
     pid_obj_t         *pid_angle;
     pid_obj_t         *pid_speed;
     uint16_t           center_ecd;
+    float              center_ins_deg;  /**< 回中时刻的陀螺角度（°） */
     bool               center_ready;
+    bool               ins_locked;      /**< 已切到陀螺反馈 */
     volatile float     target_deg;      /**< 任务层写，1kHz 回调读 */
     volatile float     target_dps;
     volatile int16_t   out_volt;
@@ -407,6 +412,14 @@ static int16_t axis_control(gim_axis_t *ax, const dj_motor_measure_t *m)
 #else
         ax->center_ecd = m->ecd;
 #endif
+        {
+            ins_attitude_t att;
+
+            ins_get_attitude(&att);
+            ax->center_ins_deg = ((axis == AXIS_YAW) ? att.yaw_total : att.roll)
+                               * GIM_RAD2DEG;
+        }
+
         ax->center_ready = true;
         /* 中位确定前不输出 */
         ax->target_deg = 0.0f;
@@ -422,8 +435,41 @@ static int16_t axis_control(gim_axis_t *ax, const dj_motor_measure_t *m)
         return 0;
     }
 
+#if GIM_USE_IMU_FEEDBACK
+    {
+        ins_attitude_t att;
+
+        ins_get_attitude(&att);
+
+        if (att.valid != 0U)
+        {
+            float cur_deg = ((axis == AXIS_YAW) ? att.yaw_total : att.roll) * GIM_RAD2DEG;
+
+            if (!ax->ins_locked)
+            {
+                /* 首次收敛：以当前位置为基准，避免角度跳变 */
+                ax->center_ins_deg = cur_deg;
+                ax->ins_locked     = true;
+                ax->target_deg     = 0.0f;
+                pid_clear(ax->pid_angle);
+                pid_clear(ax->pid_speed);
+            }
+
+            ang = cur_deg - ax->center_ins_deg;
+            rpm = ((axis == AXIS_YAW) ? att.gyro[2] : att.gyro[1])
+                * GIM_RAD2DEG / RPM_2_ANGLE_PER_SEC;
+        }
+        else
+        {
+            /* IMU 未就绪时退回编码器，保证云台仍可回中 */
+            ang = ecd_to_rel_deg(m->ecd, ax->center_ecd);
+            rpm = (float)m->speed_rpm;
+        }
+    }
+#else
     ang = ecd_to_rel_deg(m->ecd, ax->center_ecd);
     rpm = (float)m->speed_rpm;
+#endif
 
     if (axis == AXIS_YAW)
     {

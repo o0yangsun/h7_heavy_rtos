@@ -91,6 +91,9 @@ typedef struct
 #define CHS_BENCH_START_DELAY_MS    5000U
 
 /* -------------------------------- 云台参数 -------------------------------- */
+/* 云台反馈源：1 = 陀螺仪角度/角速度（锁头、抗底盘扰动），0 = 电机编码器 */
+#define GIM_USE_IMU_FEEDBACK        1
+
 #define GIM_YAW_BUS                 CAN_YAW
 #define GIM_YAW_ID                  1U
 #define GIM_PITCH_BUS               CAN_PITCH
@@ -175,6 +178,16 @@ typedef struct
 #define INS_EKF_R                   1000000.0f  /* 加速度量测噪声 */
 #define INS_EKF_LAMBDA              1.0f        /* 渐消因子 */
 #define INS_EKF_ACC_LPF             0.0f        /* 加速度低通时间常数，秒 */
+
+/* IMU 加热丝：TIM3_CH4 (PB1)，目标温度为 BMI088 的最佳工作点 */
+#define IMU_HEAT_TARGET_C           40.0f       /* 目标温度 ℃ */
+#define IMU_HEAT_HYST_C             0.5f        /* 滞环宽度 ℃ */
+#define IMU_HEAT_KP                 20.0f       /* 误差 1℃ 对应 20% 占空比 */
+#define IMU_HEAT_KI                 2.0f
+#define IMU_HEAT_DUTY_MAX           60.0f       /* 占空比上限 %，限制发热功率 */
+#define IMU_HEAT_DT_S               0.1f       /* 调用周期，秒 */
+#define IMU_HEAT_VALID_MIN_C        5.0f        /* 低于此温度视为读数无效 */
+#define IMU_HEAT_PERIOD_MS          100U        /* 温控更新周期 */
 
 /* -------------------------------- 裁判参数 -------------------------------- */
 #define REFEREE_PERIOD_MS           10U

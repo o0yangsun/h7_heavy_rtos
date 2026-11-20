@@ -16,8 +16,11 @@
 
 #include <string.h>
 
+#include "buzzer.h"
+
 #if ENABLE_IMU
 #include "bmi088.h"
+#include "imu_heat.h"
 #include "dwt.h"
 #include "quaternion_ekf.h"
 
@@ -137,6 +140,8 @@ static void ins_imu_init(void)
                       INS_EKF_LAMBDA, INS_EKF_ACC_LPF);
     }
 
+    imu_heat_init();
+
     g_ins_diag.imu_ok = 1U;
     log_printf("[INS] bmi088 ok\r\n");
 }
@@ -151,11 +156,16 @@ static void ins_imu_init(void)
 void StartInsTask(void const *argument)
 {
     uint32_t last_print = 0U;
+    uint32_t last_heat = 0U;
+    float    imu_temp = 0.0f;
 
     (void)argument;
 
     /* CubeMX 将 USB 设备初始化放在本线程的弱定义中，必须保留 */
     MX_USB_DEVICE_Init();
+
+    buzzer_init();
+    buzzer_play_startup();
 
     memset((void *)&g_ins, 0, sizeof(g_ins));
     memset((void *)&g_ins_diag, 0, sizeof(g_ins_diag));
@@ -174,6 +184,7 @@ void StartInsTask(void const *argument)
         uint32_t now = HAL_GetTick();
 
         task_stat_begin(&s_stat, now);
+        buzzer_update();
 
 #if ENABLE_IMU
         if (g_ins_diag.imu_ok != 0U)
@@ -186,6 +197,8 @@ void StartInsTask(void const *argument)
                 float   accel[3];
                 float   dt;
                 uint8_t i;
+
+                imu_temp = raw.temp_c;
 
                 for (i = 0U; i < 3U; i++)
                 {
@@ -248,6 +261,14 @@ void StartInsTask(void const *argument)
                        s_stat.loop_cnt, (double)g_ins.yaw, (double)g_ins.roll,
                        (double)g_ins.pitch, (unsigned)g_ins_diag.imu_ok,
                        (unsigned)g_ins.valid);
+        }
+#endif
+
+#if ENABLE_IMU
+        if ((now - last_heat) >= IMU_HEAT_PERIOD_MS)
+        {
+            last_heat = now;
+            imu_heat_update(imu_temp);
         }
 #endif
 
