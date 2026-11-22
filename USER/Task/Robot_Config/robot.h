@@ -155,7 +155,11 @@ typedef struct
 /* -------------------------------- 功率参数 -------------------------------- */
 #define POWER_PERIOD_MS             10U
 #define POWER_LIMIT_W               50.0f
+#define SUPERCAP_BUDGET_W           50.0f       /* 下发给超电板的电池侧功率预算 W */
 #define POWER_BUFFER_MAX_J          60.0f
+/* 功率一阶低通系数：超电上报的 Pbat+Pcap 在充放电切换时会跳变，
+ * 10ms 周期下 alpha=0.1 约等于 100ms 时间常数 */
+#define POWER_LPF_ALPHA             0.1f
 
 /* -------------------------------- 姿态参数 -------------------------------- */
 #define INS_PERIOD_MS               1U

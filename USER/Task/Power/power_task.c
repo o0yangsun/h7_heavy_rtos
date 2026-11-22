@@ -28,6 +28,7 @@ volatile power_diag_t g_power_diag;
 
 static task_stat_t s_stat;
 static float       s_scale = 1.0f;
+static float       s_power_lpf = 0.0f;
 static float       s_buffer = POWER_BUFFER_MAX_J * 0.5f;
 
 /* ------------------------------- 内部函数 -------------------------------- */
@@ -56,14 +57,15 @@ static uint8_t power_read_bus(float *voltage, float *current)
 
 #if ENABLE_SUPERCAP
     {
-        uint16_t w = supercap_get_chassis_power_w();
+        float w = supercap_get_total_power();
 
-        if (w > 0U)
+        /* 超电板只上报 Pbat+Pcap，没有母线电压，用标称值反算电流保证 p 自洽 */
+        if (w > 0.5f)
         {
-            v = (float)g_supercap_fdb.bat_voltage_v;
+            v = SUPERCAP_NOMINAL_VOLTAGE;
             g_power_diag.src = 2U;
             *voltage = v;
-            *current = (v > 1.0f) ? ((float)w / v) : 0.0f;
+            *current = w / v;
             return 1U;
         }
     }
@@ -96,8 +98,9 @@ void StartPowerTask(void const *argument)
     memset((void *)&g_power_diag, 0, sizeof(g_power_diag));
     task_stat_init(&s_stat, POWER_PERIOD_MS);
 
-    s_scale  = 1.0f;
-    s_buffer = POWER_BUFFER_MAX_J * 0.5f;
+    s_scale     = 1.0f;
+    s_buffer    = POWER_BUFFER_MAX_J * 0.5f;
+    s_power_lpf = 0.0f;
 
 #if ENABLE_INA226
     ina226_init();
@@ -132,6 +135,17 @@ void StartPowerTask(void const *argument)
         }
 
         p = v * i;
+
+        /* 功率低通：超电上报值在充放电切换时跳变明显，直接进缓冲会让 scale 抖动 */
+        if (g_power_diag.src != 0U)
+        {
+            s_power_lpf += POWER_LPF_ALPHA * (p - s_power_lpf);
+            p = s_power_lpf;
+        }
+        else
+        {
+            s_power_lpf = 0.0f;
+        }
 
         /* 能量缓冲 */
         if (dt > 0.0f)
@@ -170,10 +184,10 @@ void StartPowerTask(void const *argument)
         g_power_diag.buffer_j  = s_buffer;
         g_power_diag.scale     = s_scale;
 #if ENABLE_SUPERCAP
-        g_power_diag.cap_online  = g_supercap_fdb.online;
-        g_power_diag.cap_energy  = g_supercap_fdb.energy_pct;
-        g_power_diag.cap_power_w = (float)g_supercap_fdb.cap_power_w;
-        g_power_diag.cap_chassis_w = g_supercap_fdb.chassis_power_w;
+        g_power_diag.cap_online    = g_supercap_fdb.online;
+        g_power_diag.cap_energy    = g_supercap_fdb.energy_pct;
+        g_power_diag.cap_power_w   = supercap_get_total_power();
+        g_power_diag.cap_chassis_w = (uint16_t)(g_supercap_fdb.total_power_w10 / 100U);
 #endif
 
 #if ENABLE_DIAG_POWER
