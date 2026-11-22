@@ -60,6 +60,8 @@ void supercap_can_rx(uint8_t bus, uint32_t std_id, const uint8_t *data)
     g_supercap_fdb.total_power_w10 = (uint16_t)((uint16_t)data[2]
                                     | ((uint16_t)data[3] << 8));
     g_supercap_fdb.energy_pct     = data[4];
+    g_supercap_fdb.bat_power_w10  = (uint16_t)((uint16_t)data[5]
+                                    | ((uint16_t)data[6] << 8));
     g_supercap_fdb.last_rx_ms     = s_last_rx_tick;
     g_supercap_fdb.rx_cnt++;
 }
@@ -151,4 +153,14 @@ float supercap_get_total_power(void)
     }
 
     return (float)g_supercap_fdb.total_power_w10 * 0.01f;
+}
+
+float supercap_get_bat_power(void)
+{
+    if (g_supercap_fdb.online == 0U)
+    {
+        return 0.0f;
+    }
+
+    return (float)g_supercap_fdb.bat_power_w10 * 0.01f;
 }

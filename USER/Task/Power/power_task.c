@@ -19,6 +19,7 @@
 #include "main.h"
 #include "supercap_task.h"
 #include "ina226.h"
+#include "chassis_task.h"
 
 #include <string.h>
 
@@ -30,7 +31,6 @@ static task_stat_t s_stat;
 static float       s_scale = 1.0f;
 static float       s_power_lpf = 0.0f;
 static float       s_power_peak = 0.0f;
-static float       s_buffer = POWER_BUFFER_MAX_J * 0.5f;
 
 /* ------------------------------- 内部函数 -------------------------------- */
 
@@ -57,18 +57,17 @@ static uint8_t power_read_bus(float *voltage, float *current)
 #endif
 
 #if ENABLE_SUPERCAP
+    if (supercap_is_online() != 0U)
     {
-        float w = supercap_get_total_power();
+        /* 限幅对象是电池侧功率 Pbat，这是裁判系统与板端闭环共同的考核量；
+         * TotalPower 含超电放电，不能直接和预算比较 */
+        float w = supercap_get_bat_power();
 
-        /* 超电板只上报 Pbat+Pcap，没有母线电压，用标称值反算电流保证 p 自洽 */
-        if (w > 0.5f)
-        {
-            v = SUPERCAP_NOMINAL_VOLTAGE;
-            g_power_diag.src = 2U;
-            *voltage = v;
-            *current = w / v;
-            return 1U;
-        }
+        v = SUPERCAP_NOMINAL_VOLTAGE;
+        g_power_diag.src = 2U;
+        *voltage = v;
+        *current = w / v;
+        return 1U;
     }
 #endif
 
@@ -92,7 +91,6 @@ float power_get_scale(void)
 void StartPowerTask(void const *argument)
 {
     uint32_t last_print = 0U;
-    uint32_t last_ms    = HAL_GetTick();
 
     (void)argument;
 
@@ -100,7 +98,6 @@ void StartPowerTask(void const *argument)
     task_stat_init(&s_stat, POWER_PERIOD_MS);
 
     s_scale     = 1.0f;
-    s_buffer    = POWER_BUFFER_MAX_J * 0.5f;
     s_power_lpf = 0.0f;
 
 #if ENABLE_INA226
@@ -118,11 +115,9 @@ void StartPowerTask(void const *argument)
     for (;;)
     {
         uint32_t now = HAL_GetTick();
-        float    dt  = (float)(now - last_ms) / 1000.0f;
         float    v = 0.0f, i = 0.0f, p;
 
         task_stat_begin(&s_stat, now);
-        last_ms = now;
 
 #if ENABLE_SUPERCAP
         /* 超电收发与在线判定，发送周期等于本线程周期 */
@@ -154,34 +149,23 @@ void StartPowerTask(void const *argument)
             s_power_lpf = 0.0f;
         }
 
-        /* 能量缓冲 */
-        if (dt > 0.0f)
+        /* 直接限幅，不做能量缓冲。
+         * 比赛按裁判系统的 60J 缓冲判罚，软件侧再预支一遍等于双重冒险，
+         * 这里超限立即按比例压低，低于 90% 才恢复，中间区间保持以避免抖动 */
+        if (g_power_diag.src == 0U)
         {
-            if (g_power_diag.src == 0U)
-            {
-                /* 无有效采样：不知道真实功率，不压底盘，缓冲按满功率回充 */
-                s_buffer += POWER_LIMIT_W * dt;
-                s_buffer = float_constrain(s_buffer, 0.0f, POWER_BUFFER_MAX_J);
-                s_scale  = 1.0f;
-            }
-            else
-            {
-                s_buffer += (POWER_LIMIT_W - p) * dt;
-                s_buffer = float_constrain(s_buffer, 0.0f, POWER_BUFFER_MAX_J);
-
-                if (s_buffer <= 0.0f)
-                {
-                    /* 缓冲见底：按超出的比例压功率，最低压到 30% */
-                    float over = (p > POWER_LIMIT_W) ? (POWER_LIMIT_W / p) : 1.0f;
-                    s_scale = float_constrain(over, 0.3f, 1.0f);
-                    g_power_diag.over_cnt++;
-                }
-                else if (s_buffer >= (POWER_BUFFER_MAX_J * 0.9f))
-                {
-                    s_scale = 1.0f;
-                }
-            }
+            s_scale = 1.0f;
         }
+        else if (p > POWER_LIMIT_W)
+        {
+            s_scale = float_constrain(POWER_LIMIT_W / p, 0.2f, 1.0f);
+            g_power_diag.over_cnt++;
+        }
+        else if (p < (POWER_LIMIT_W * 0.9f))
+        {
+            s_scale = 1.0f;
+        }
+        /* 90%~100% 区间保持上一周期的值，形成迟滞 */
 
         /* 诊断 */
         g_power_diag.loop_cnt   = s_stat.loop_cnt;
@@ -189,25 +173,25 @@ void StartPowerTask(void const *argument)
         g_power_diag.current_a  = i;
         g_power_diag.power_w    = p;
         g_power_diag.power_peak = s_power_peak;
-        g_power_diag.buffer_j   = s_buffer;
+        g_power_diag.buffer_j   = POWER_LIMIT_W - p;    /* 功率余量 W，负数表示超限 */
+        g_power_diag.power_est  = chassis_power_estimate();
         g_power_diag.scale      = s_scale;
 #if ENABLE_SUPERCAP
         g_power_diag.cap_online    = g_supercap_fdb.online;
         g_power_diag.cap_energy    = g_supercap_fdb.energy_pct;
-        g_power_diag.cap_power_w   = supercap_get_total_power();
+        g_power_diag.cap_power_w   = supercap_get_bat_power();
         g_power_diag.cap_chassis_w = (uint16_t)(g_supercap_fdb.total_power_w10 / 100U);
 #endif
 
 #if ENABLE_DIAG_POWER
         if ((now - last_print) >= 1000U)
         {
-            last_print   = now;
-            s_power_peak = 0.0f;
+            last_print = now;
             /* err 增长说明两路数据源都没有有效采样 */
             log_printf("[PWR] src=%u %.1fV %.2fA %.0fW buf=%.1f scale=%.2f err=%lu "
                        "cap=%u %u%% %dW\r\n",
                        (unsigned)g_power_diag.src,
-                       (double)v, (double)i, (double)p, (double)s_buffer,
+                       (double)v, (double)i, (double)p, (double)(POWER_LIMIT_W - p),
                        (double)s_scale, g_power_diag.i2c_err,
                        (unsigned)g_power_diag.cap_online,
                        (unsigned)g_power_diag.cap_energy,

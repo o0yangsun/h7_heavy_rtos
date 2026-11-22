@@ -69,6 +69,7 @@ typedef struct
     uint8_t  supply_ready;      /**< bit5 允许供能请求 */
     uint8_t  energy_pct;        /**< 储能百分比 0~100 */
     uint16_t total_power_w10;   /**< Pbat + Pcap，0.01 W 单位 */
+    uint16_t bat_power_w10;     /**< 电池侧功率 Pbat，0.01 W 单位 */
     uint32_t rx_cnt;
     uint32_t tx_cnt;
     uint32_t err_cnt;
@@ -95,8 +96,11 @@ uint16_t supercap_get_budget(void);
 /** 1 = 在线 */
 uint8_t supercap_is_online(void);
 
-/** 上报功率 W（Pbat + Pcap），离线时返回 0 */
+/** 上报总功率 W（Pbat + Pcap），离线时返回 0 */
 float supercap_get_total_power(void);
+
+/** 电池侧功率 W（板端闭环的控制对象），离线时返回 0 */
+float supercap_get_bat_power(void);
 
 #ifdef __cplusplus
 }

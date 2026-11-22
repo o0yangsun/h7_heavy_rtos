@@ -54,6 +54,9 @@ void chassis_set_mode(chassis_mode_e mode);
 /** 读反馈快照 */
 void chassis_get_fdb(chassis_fdb_t *out);
 
+/** 用四个底盘电机的转矩电流与转速估算总功率 W，参数未标定，供功率前馈对比 */
+float chassis_power_estimate(void);
+
 #ifdef __cplusplus
 }
 #endif

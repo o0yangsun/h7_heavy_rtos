@@ -31,6 +31,7 @@ typedef struct
     float              ref_prev;      /**< 上周期目标绝对值，用于检测从 0 起步 */
     uint32_t           launch_tick;   /**< 起步时刻 ms */
     uint8_t            launching;     /**< 1 = 软启动进行中 */
+    float              out_last;      /**< 上周期输出，用于斜率限制 */
 } chs_wheel_t;
 
 static chs_wheel_t            s_wheel[CHS_WHEEL_NUM];
@@ -82,6 +83,38 @@ static void chassis_update_fdb(void)
         s_fdb.rpm_act[i] = s_wheel[i].act_rpm;
         s_fdb.out[i]     = s_wheel[i].out;
     }
+}
+
+/**
+ * @brief 用四个底盘电机的转矩电流与转速估算总功率
+ * @return 估算功率 W（机械功率除以效率再叠加静态损耗）
+ * @note  参数集中在 robot.h 的 CHS_PWR_*，需要与超电实测值对比标定
+ */
+float chassis_power_estimate(void)
+{
+    float   p = 0.0f;
+    uint8_t i;
+
+    for (i = 0U; i < CHS_WHEEL_NUM; i++)
+    {
+        dj_motor_object_t *m = s_wheel[i].motor;
+
+        if ((m == NULL) || (m->measure.online == 0U))
+        {
+            continue;
+        }
+
+        {
+            float i_a = (float)m->measure.real_current * CHS_PWR_CURRENT_A;
+            float tau = i_a * CHS_PWR_KT;
+            float w   = (float)m->measure.speed_rpm_f * CHS_PWR_RPM2RAD;
+
+            /* 机械功率 τ·ω，刹车时为正、反拖时为负，不做绝对值处理 */
+            p += tau * w;
+        }
+    }
+
+    return (p / CHS_PWR_EFF) + CHS_PWR_P0;
 }
 
 void chassis_get_fdb(chassis_fdb_t *out)
@@ -571,6 +604,22 @@ static int16_t wheel_ctrl_cb(const dj_motor_measure_t *m, void *ctx)
         {
             w->launching = 0U;
         }
+    }
+
+    /* 输出斜率限制：把电流阶跃摊成斜坡，压平起步冲击而不拖慢目标响应 */
+    {
+        float delta = out - w->out_last;
+
+        if (delta > CHS_OUT_SLEW)
+        {
+            out = w->out_last + CHS_OUT_SLEW;
+        }
+        else if (delta < -CHS_OUT_SLEW)
+        {
+            out = w->out_last - CHS_OUT_SLEW;
+        }
+
+        w->out_last = out;
     }
 
     w->out = (int16_t)(out * w->sign);

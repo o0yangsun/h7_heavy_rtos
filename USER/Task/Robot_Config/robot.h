@@ -157,9 +157,20 @@ typedef struct
 #define CHS_LAUNCH_MS               120U
 #define CHS_LAUNCH_RATIO            0.55f
 
+/* 输出斜率限制：每 1ms 电流指令最大变化量（满量程 16384，400 约 41ms 爬满）。
+ * 只压电流阶跃，不改变目标速度与稳态，起步冲击被摊平 */
+#define CHS_OUT_SLEW                400.0f
+
+/* 功率估算参数：P = Σ(Kt·I·ω)/η + P0，初值按 3508 经验值，需用超电实测值标定 */
+#define CHS_PWR_CURRENT_A           0.001220703f   /* 20A / 16384，C620 电流量程 */
+#define CHS_PWR_KT                  0.3f           /* 转矩常数 N·m/A */
+#define CHS_PWR_RPM2RAD             0.104719755f   /* rpm -> rad/s */
+#define CHS_PWR_EFF                 0.75f          /* 电机 + 电调综合效率 */
+#define CHS_PWR_P0                  5.0f           /* 静态与铁损 W */
+
 /* -------------------------------- 功率参数 -------------------------------- */
 #define POWER_PERIOD_MS             10U
-#define POWER_LIMIT_W               50.0f
+#define POWER_LIMIT_W               50.0f       /* 主控硬上限，比较对象是电池侧 Pbat，对齐比赛限额 */
 #define SUPERCAP_BUDGET_W           50.0f       /* 下发给超电板的电池侧功率预算 W */
 #define POWER_BUFFER_MAX_J          60.0f
 /* 功率一阶低通系数：超电上报的 Pbat+Pcap 在充放电切换时会跳变，
