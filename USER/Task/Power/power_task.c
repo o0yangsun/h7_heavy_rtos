@@ -29,6 +29,7 @@ volatile power_diag_t g_power_diag;
 static task_stat_t s_stat;
 static float       s_scale = 1.0f;
 static float       s_power_lpf = 0.0f;
+static float       s_power_peak = 0.0f;
 static float       s_buffer = POWER_BUFFER_MAX_J * 0.5f;
 
 /* ------------------------------- 内部函数 -------------------------------- */
@@ -136,6 +137,12 @@ void StartPowerTask(void const *argument)
 
         p = v * i;
 
+        /* 峰值记录必须在低通之前，记录的是超电板实际看到的瞬时值 */
+        if (p > s_power_peak)
+        {
+            s_power_peak = p;
+        }
+
         /* 功率低通：超电上报值在充放电切换时跳变明显，直接进缓冲会让 scale 抖动 */
         if (g_power_diag.src != 0U)
         {
@@ -177,12 +184,13 @@ void StartPowerTask(void const *argument)
         }
 
         /* 诊断 */
-        g_power_diag.loop_cnt  = s_stat.loop_cnt;
-        g_power_diag.voltage_v = v;
-        g_power_diag.current_a = i;
-        g_power_diag.power_w   = p;
-        g_power_diag.buffer_j  = s_buffer;
-        g_power_diag.scale     = s_scale;
+        g_power_diag.loop_cnt   = s_stat.loop_cnt;
+        g_power_diag.voltage_v  = v;
+        g_power_diag.current_a  = i;
+        g_power_diag.power_w    = p;
+        g_power_diag.power_peak = s_power_peak;
+        g_power_diag.buffer_j   = s_buffer;
+        g_power_diag.scale      = s_scale;
 #if ENABLE_SUPERCAP
         g_power_diag.cap_online    = g_supercap_fdb.online;
         g_power_diag.cap_energy    = g_supercap_fdb.energy_pct;
@@ -193,7 +201,8 @@ void StartPowerTask(void const *argument)
 #if ENABLE_DIAG_POWER
         if ((now - last_print) >= 1000U)
         {
-            last_print = now;
+            last_print   = now;
+            s_power_peak = 0.0f;
             /* err 增长说明两路数据源都没有有效采样 */
             log_printf("[PWR] src=%u %.1fV %.2fA %.0fW buf=%.1f scale=%.2f err=%lu "
                        "cap=%u %u%% %dW\r\n",

@@ -149,8 +149,13 @@ typedef struct
 #define CMD_MAX_VY                  5000.0f     /* mm/s */
 #define CMD_MAX_VR                  8.0f        /* rad/s */
 #define CMD_SPIN_VW                 3.0f        /* rad/s */
-#define CMD_RC_ACC_XY               4.0f        /* mm/s per ms */
-#define CMD_RC_ACC_W                0.008f      /* rad/s per ms */
+#define CMD_RC_ACC_XY               2.0f        /* mm/s per ms */
+#define CMD_RC_ACC_W                0.005f      /* rad/s per ms */
+
+/* 起步软启动：指令零延时，只限制起步阶段的电流上限。
+ * 目标从 0 变为非 0 后 CHS_LAUNCH_MS 内，输出上限从 RATIO 线性放开到 100% */
+#define CHS_LAUNCH_MS               120U
+#define CHS_LAUNCH_RATIO            0.55f
 
 /* -------------------------------- 功率参数 -------------------------------- */
 #define POWER_PERIOD_MS             10U

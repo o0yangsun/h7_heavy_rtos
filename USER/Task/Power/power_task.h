@@ -20,6 +20,7 @@ typedef struct
     float    voltage_v;
     float    current_a;
     float    power_w;
+    float    power_peak;    /**< 最近 1s 内的功率峰值 W */
     float    buffer_j;      /**< 能量缓冲余量（J） */
     float    scale;         /**< 功率比例 0~1 */
     uint32_t over_cnt;

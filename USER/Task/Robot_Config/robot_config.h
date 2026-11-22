@@ -54,6 +54,6 @@
 #define ENABLE_MOTOR_CAN_SCAN           1
 
 #define ENABLE_CAN_MONITOR              0   /* 只听模式，不发送、不应答 ACK */
-#define ENABLE_RC_RAMP                  0   /* 遥控速度斜坡 */
+#define ENABLE_RC_RAMP                  0   /* 遥控速度斜坡；改成输出软启动后不需要指令斜坡 */
 
 #endif /* ROBOT_CONFIG_H */

@@ -28,6 +28,9 @@ typedef struct
     volatile float     act_rpm;
     volatile int16_t   out;
     float              sign;
+    float              ref_prev;      /**< 上周期目标绝对值，用于检测从 0 起步 */
+    uint32_t           launch_tick;   /**< 起步时刻 ms */
+    uint8_t            launching;     /**< 1 = 软启动进行中 */
 } chs_wheel_t;
 
 static chs_wheel_t            s_wheel[CHS_WHEEL_NUM];
@@ -515,6 +518,15 @@ static int16_t wheel_ctrl_cb(const dj_motor_measure_t *m, void *ctx)
         }
     }
 
+    /* 起步检测：目标从 0 变为非 0 时打开软启动窗口 */
+    if ((fabsf(w->ref_rpm) > 1.0f) && (w->ref_prev <= 1.0f))
+    {
+        w->launch_tick = HAL_GetTick();
+        w->launching   = 1U;
+    }
+
+    w->ref_prev = fabsf(w->ref_rpm);
+
     out = pid_calculate(w->pid_speed, w->act_rpm, w->ref_rpm);
 
     /* 静摩擦补偿：仅当输出与目标同向且幅值不足时补到最小有效值，
@@ -533,6 +545,31 @@ static int16_t wheel_ctrl_cb(const dj_motor_measure_t *m, void *ctx)
             && (w->act_rpm > -CHS_SPEED_STATIC_RPM))
         {
             out = -CHS_SPEED_MIN_OUT;
+        }
+    }
+
+    /* 起步软启动：只压启动窗口内的输出上限，指令本身零延时 */
+    if (w->launching != 0U)
+    {
+        uint32_t el = HAL_GetTick() - w->launch_tick;
+
+        if (el < CHS_LAUNCH_MS)
+        {
+            float lim = CHS_SPEED_MAX * (CHS_LAUNCH_RATIO
+                      + (1.0f - CHS_LAUNCH_RATIO) * (float)el / (float)CHS_LAUNCH_MS);
+
+            if (out > lim)
+            {
+                out = lim;
+            }
+            else if (out < -lim)
+            {
+                out = -lim;
+            }
+        }
+        else
+        {
+            w->launching = 0U;
         }
     }
 
