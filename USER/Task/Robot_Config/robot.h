@@ -10,6 +10,16 @@
 
 #include <stdint.h>
 
+/* ------------------------------ 串口分配 ---------------------------------- */
+/* UART5   100000 8E1  DBUS 遥控
+ * UART7   115200      日志
+ * USART10 115200      无线链路
+ * USART1  915200/115200 舵机总线，当前复用为裁判系统（referee_uart_start 会改波特率） */
+#define REFEREE_UART_INSTANCE       USART1
+#define REFEREE_UART_HANDLE         huart1
+#define REFEREE_UART_BAUDRATE       115200U
+#define REFEREE_RX_BUF_SIZE         256U
+
 /* ------------------------------ CAN 总线分配 ------------------------------ */
 /* CAN1：底盘 4 个麦轮
  * CAN2：yaw 电机、拨弹电机、特化机构电机、超级电容

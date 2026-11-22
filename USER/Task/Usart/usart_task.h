@@ -29,6 +29,7 @@ typedef struct
     uint32_t uart_err;      /**< HAL 错误回调次数 */
     uint32_t dbus_bytes;    /**< UART5 收到的原始字节数 */
     uint32_t uart_rearm;    /**< 接收重新武装次数 */
+    uint32_t ref_bytes;     /**< 裁判系统串口收到的字节数 */
 } usart_diag_t;
 
 extern volatile usart_diag_t g_usart_diag;

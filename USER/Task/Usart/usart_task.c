@@ -12,6 +12,7 @@
 #include "robot.h"
 #include "robot_config.h"
 #include "rc_dbus.h"
+#include "referee_system.h"
 #include "cmsis_os.h"
 #include "main.h"
 #include "usart.h"
@@ -31,6 +32,28 @@ static uint8_t      s_dbus_buf[DBUS_RX_BUF_LEN];
 
 #if ENABLE_WIRELESS
 static uint8_t s_wl_rx_byte;
+#endif
+
+#if ENABLE_REFEREE
+static uint8_t s_ref_buf[REFEREE_RX_BUF_SIZE];
+
+/**
+ * @brief 启动裁判系统串口的 DMA 空闲接收
+ * @note  USART1 原为舵机总线 921600，这里改成裁判系统要求的 115200
+ */
+static void referee_uart_start(void)
+{
+    if (REFEREE_UART_HANDLE.Init.BaudRate != REFEREE_UART_BAUDRATE)
+    {
+        (void)HAL_UART_DeInit(&REFEREE_UART_HANDLE);
+        REFEREE_UART_HANDLE.Init.BaudRate = REFEREE_UART_BAUDRATE;
+        (void)HAL_UART_Init(&REFEREE_UART_HANDLE);
+    }
+
+    (void)HAL_UARTEx_ReceiveToIdle_DMA(&REFEREE_UART_HANDLE, s_ref_buf,
+                                       REFEREE_RX_BUF_SIZE);
+    __HAL_DMA_DISABLE_IT(REFEREE_UART_HANDLE.hdmarx, DMA_IT_HT);
+}
 #endif
 
 /* ------------------------------ DBUS 解析 -------------------------------- */
@@ -102,6 +125,19 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
         return;
     }
 #endif
+
+#if ENABLE_REFEREE
+    if (huart->Instance == REFEREE_UART_INSTANCE)
+    {
+        g_usart_diag.ref_bytes += Size;
+        referee_data_unpack(s_ref_buf, Size);
+
+        (void)HAL_UARTEx_ReceiveToIdle_DMA(&REFEREE_UART_HANDLE, s_ref_buf,
+                                           REFEREE_RX_BUF_SIZE);
+        __HAL_DMA_DISABLE_IT(REFEREE_UART_HANDLE.hdmarx, DMA_IT_HT);
+        return;
+    }
+#endif
 }
 
 /**
@@ -160,6 +196,16 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
         return;
     }
 #endif
+
+#if ENABLE_REFEREE
+    if (huart->Instance == REFEREE_UART_INSTANCE)
+    {
+        huart->RxState = HAL_UART_STATE_READY;
+        referee_uart_start();
+        g_usart_diag.uart_rearm++;
+        return;
+    }
+#endif
 }
 
 /* ------------------------------- 线程入口 -------------------------------- */
@@ -201,8 +247,13 @@ void StartUsartTask(void const *argument)
     (void)HAL_UART_Receive_IT(&huart10, &s_wl_rx_byte, 1U);
 #endif
 
-    log_printf("[USR] up: dbus(UART5)=%d wireless(USART10)=%d\r\n",
-               (int)ENABLE_RC_DBUS, (int)ENABLE_WIRELESS);
+#if ENABLE_REFEREE
+    referee_system_init();
+    referee_uart_start();
+#endif
+
+    log_printf("[USR] up: dbus(UART5)=%d wireless(USART10)=%d referee(USART1)=%d\r\n",
+               (int)ENABLE_RC_DBUS, (int)ENABLE_WIRELESS, (int)ENABLE_REFEREE);
 
     for (;;)
     {
