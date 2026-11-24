@@ -57,7 +57,7 @@ static uint8_t power_read_bus(float *voltage, float *current)
 #endif
 
 #if ENABLE_SUPERCAP
-    if (supercap_is_online() != 0U)
+    if ((supercap_is_online() != 0U) && (supercap_is_enabled() != 0U))
     {
         /* 限幅对象是电池侧功率 Pbat，这是裁判系统与板端闭环共同的考核量；
          * TotalPower 含超电放电，不能直接和预算比较 */
@@ -70,6 +70,20 @@ static uint8_t power_read_bus(float *voltage, float *current)
         return 1U;
     }
 #endif
+
+    /* 超电不可用时用电机模型兜底，避免数据源掉线导致限幅被完全放开 */
+    {
+        float w = chassis_power_estimate();
+
+        if (w > 0.5f)
+        {
+            v = SUPERCAP_NOMINAL_VOLTAGE;
+            g_power_diag.src = 3U;
+            *voltage = v;
+            *current = w / v;
+            return 1U;
+        }
+    }
 
     *voltage = 0.0f;
     *current = 0.0f;
@@ -179,8 +193,8 @@ void StartPowerTask(void const *argument)
 #if ENABLE_SUPERCAP
         g_power_diag.cap_online    = g_supercap_fdb.online;
         g_power_diag.cap_energy    = g_supercap_fdb.energy_pct;
-        g_power_diag.cap_power_w   = supercap_get_bat_power();
-        g_power_diag.cap_chassis_w = (uint16_t)(g_supercap_fdb.total_power_w10 / 100U);
+        g_power_diag.bat_power_w   = supercap_get_bat_power();
+        g_power_diag.total_power_w = supercap_get_total_power();
 #endif
 
 #if ENABLE_DIAG_POWER
@@ -188,14 +202,16 @@ void StartPowerTask(void const *argument)
         {
             last_print = now;
             /* err 增长说明两路数据源都没有有效采样 */
-            log_printf("[PWR] src=%u %.1fV %.2fA %.0fW buf=%.1f scale=%.2f err=%lu "
-                       "cap=%u %u%% %dW\r\n",
+            log_printf("[PWR] bat=%.1fW tot=%.1fW est=%.1fW scale=%.2f "
+                       "energy=%u%% peak=%.1fW src=%u err=%lu\r\n",
+                       (double)supercap_get_bat_power(),
+                       (double)supercap_get_total_power(),
+                       (double)g_power_diag.power_est,
+                       (double)s_scale,
+                       (unsigned)g_supercap_fdb.energy_pct,
+                       (double)s_power_peak,
                        (unsigned)g_power_diag.src,
-                       (double)v, (double)i, (double)p, (double)(POWER_LIMIT_W - p),
-                       (double)s_scale, g_power_diag.i2c_err,
-                       (unsigned)g_power_diag.cap_online,
-                       (unsigned)g_power_diag.cap_energy,
-                       (int)g_power_diag.cap_power_w);
+                       g_power_diag.i2c_err);
         }
 #endif
 

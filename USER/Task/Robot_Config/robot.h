@@ -161,17 +161,18 @@ typedef struct
  * 只压电流阶跃，不改变目标速度与稳态，起步冲击被摊平 */
 #define CHS_OUT_SLEW                400.0f
 
-/* 功率估算参数：P = Σ(Kt·I·ω)/η + P0，初值按 3508 经验值，需用超电实测值标定 */
-#define CHS_PWR_CURRENT_A           0.001220703f   /* 20A / 16384，C620 电流量程 */
-#define CHS_PWR_KT                  0.3f           /* 转矩常数 N·m/A */
-#define CHS_PWR_RPM2RAD             0.104719755f   /* rpm -> rad/s */
-#define CHS_PWR_EFF                 0.75f          /* 电机 + 电调综合效率 */
-#define CHS_PWR_P0                  5.0f           /* 静态与铁损 W */
+/* 3508 功率模型（raw 单位，取自开源舵轮步兵参数）
+ * P = Kt·I·ω + k1·ω² + k2·I² + C
+ *   I 为 PID 输出原始值（±16384），ω 为转子转速 rpm */
+#define CHS_PWR_KT_RAW              1.575e-06f      /* 机械功率系数，按本车高速点标定 */
+#define CHS_PWR_K1                  1.453e-07f      /* 铁损/摩擦系数 */
+#define CHS_PWR_K2                  1.23e-07f       /* 铜损系数 */
+#define CHS_PWR_C                   1.4f            /* 单电机静态损耗 W，待机实测标定 */
 
 /* -------------------------------- 功率参数 -------------------------------- */
 #define POWER_PERIOD_MS             10U
-#define POWER_LIMIT_W               50.0f       /* 主控硬上限，比较对象是电池侧 Pbat，对齐比赛限额 */
-#define SUPERCAP_BUDGET_W           50.0f       /* 下发给超电板的电池侧功率预算 W */
+#define POWER_LIMIT_W               47.0f       /* 主控硬上限，比较对象是电池侧 Pbat */
+#define SUPERCAP_BUDGET_W           47.0f       /* 下发给超电板的电池侧功率预算 W */
 #define POWER_BUFFER_MAX_J          60.0f
 /* 功率一阶低通系数：超电上报的 Pbat+Pcap 在充放电切换时会跳变，
  * 10ms 周期下 alpha=0.1 约等于 100ms 时间常数 */

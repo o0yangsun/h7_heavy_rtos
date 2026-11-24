@@ -22,18 +22,24 @@ static supercap_cmd_t s_cmd;
 static uint32_t       s_last_rx_tick;
 static uint32_t       s_last_enable_tick;
 static uint8_t        s_rx_seen;
+static uint8_t        s_want_enable = 1U;   /* 1 = 期望超电工作，0 = 已请求软下电 */
+
+/* 调试入口：0 = 无，1 = 请求软下电，2 = 请求恢复使能，执行后自动清零。
+ * 调试器只写内存（set var），不要用 call 调用发 CAN 的函数，halt 状态下会触发异常 */
+volatile uint8_t      g_supercap_debug_cmd = 0U;
 
 /* ------------------------------- 内部函数 -------------------------------- */
 
-/** 组一帧 0x221 并发出去 */
+/** 组一帧 0x221 并发出去。按协议只有控制帧携带预算，使能/失能帧的字节 2~3 填 0 */
 static uint8_t supercap_send_frame(uint8_t type, uint8_t byte1)
 {
-    uint8_t frame[8];
+    uint8_t  frame[8];
+    uint16_t budget = (type == SUPERCAP_CMD_TYPE_CONTROL) ? s_cmd.budget_w : 0U;
 
     frame[0] = type;
     frame[1] = byte1;
-    frame[2] = (uint8_t)(s_cmd.budget_w & 0x00FFU);
-    frame[3] = (uint8_t)((s_cmd.budget_w >> 8) & 0x00FFU);
+    frame[2] = (uint8_t)(budget & 0x00FFU);
+    frame[3] = (uint8_t)((budget >> 8) & 0x00FFU);
     frame[4] = 0U;
     frame[5] = 0U;
     frame[6] = 0U;
@@ -57,11 +63,11 @@ void supercap_can_rx(uint8_t bus, uint32_t std_id, const uint8_t *data)
     g_supercap_fdb.mode           = (uint8_t)(data[1] & SUPERCAP_FLAG_MODE_MASK);
     g_supercap_fdb.normal_running = ((data[1] & SUPERCAP_FLAG_NORMAL) != 0U) ? 1U : 0U;
     g_supercap_fdb.supply_ready   = ((data[1] & SUPERCAP_FLAG_SUPPLY_OK) != 0U) ? 1U : 0U;
-    g_supercap_fdb.total_power_w10 = (uint16_t)((uint16_t)data[2]
-                                    | ((uint16_t)data[3] << 8));
-    g_supercap_fdb.energy_pct     = data[4];
-    g_supercap_fdb.bat_power_w10  = (uint16_t)((uint16_t)data[5]
-                                    | ((uint16_t)data[6] << 8));
+    g_supercap_fdb.total_power_w = (float)((uint16_t)((uint16_t)data[2]
+                                   | ((uint16_t)data[3] << 8))) * 0.01f;
+    g_supercap_fdb.energy_pct    = data[4];
+    g_supercap_fdb.bat_power_w   = (float)((uint16_t)((uint16_t)data[5]
+                                   | ((uint16_t)data[6] << 8))) * 0.01f;
     g_supercap_fdb.last_rx_ms     = s_last_rx_tick;
     g_supercap_fdb.rx_cnt++;
 }
@@ -78,6 +84,7 @@ void supercap_init(void)
     s_last_rx_tick     = 0U;
     s_last_enable_tick = 0U;
     s_rx_seen          = 0U;
+    s_want_enable      = 1U;
 
     dj_motor_set_rx_hook(supercap_can_rx);
 
@@ -88,6 +95,8 @@ void supercap_init(void)
 
 void supercap_send_enable(void)
 {
+    s_want_enable = 1U;
+
     if (supercap_send_frame(SUPERCAP_CMD_TYPE_ENABLE, 1U) != 0U)
     {
         g_supercap_fdb.tx_cnt++;
@@ -99,9 +108,40 @@ void supercap_send_enable(void)
     }
 }
 
+void supercap_disable(void)
+{
+    s_want_enable = 0U;
+
+    if (supercap_send_frame(SUPERCAP_CMD_TYPE_ENABLE, 0U) != 0U)
+    {
+        g_supercap_fdb.tx_cnt++;
+        s_last_enable_tick = HAL_GetTick();
+    }
+    else
+    {
+        g_supercap_fdb.err_cnt++;
+    }
+}
+
+uint8_t supercap_is_enabled(void)
+{
+    return s_want_enable;
+}
+
 void supercap_update(void)
 {
     uint32_t now = HAL_GetTick();
+
+    if (g_supercap_debug_cmd == 1U)
+    {
+        g_supercap_debug_cmd = 0U;
+        supercap_disable();
+    }
+    else if (g_supercap_debug_cmd == 2U)
+    {
+        g_supercap_debug_cmd = 0U;
+        supercap_send_enable();
+    }
 
     if ((s_rx_seen != 0U) && ((now - s_last_rx_tick) <= SUPERCAP_OFFLINE_MS))
     {
@@ -110,6 +150,18 @@ void supercap_update(void)
     else
     {
         g_supercap_fdb.online = 0U;
+    }
+
+    if (s_want_enable == 0U)
+    {
+        /* 已请求软下电：周期补发失能帧，停发控制帧 */
+        if ((s_last_enable_tick == 0U)
+            || ((now - s_last_enable_tick) >= SUPERCAP_ENABLE_RESEND_MS))
+        {
+            supercap_disable();
+        }
+
+        return;
     }
 
     /* 使能帧周期补发：板端重复请求不会重启自检，也能容忍掉帧 */
@@ -152,7 +204,7 @@ float supercap_get_total_power(void)
         return 0.0f;
     }
 
-    return (float)g_supercap_fdb.total_power_w10 * 0.01f;
+    return g_supercap_fdb.total_power_w;
 }
 
 float supercap_get_bat_power(void)
@@ -162,5 +214,5 @@ float supercap_get_bat_power(void)
         return 0.0f;
     }
 
-    return (float)g_supercap_fdb.bat_power_w10 * 0.01f;
+    return g_supercap_fdb.bat_power_w;
 }

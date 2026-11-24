@@ -68,8 +68,8 @@ typedef struct
     uint8_t  normal_running;    /**< bit4 正常运行 */
     uint8_t  supply_ready;      /**< bit5 允许供能请求 */
     uint8_t  energy_pct;        /**< 储能百分比 0~100 */
-    uint16_t total_power_w10;   /**< Pbat + Pcap，0.01 W 单位 */
-    uint16_t bat_power_w10;     /**< 电池侧功率 Pbat，0.01 W 单位 */
+    float    total_power_w;     /**< Pbat + Pcap，单位 W（总线负载） */
+    float    bat_power_w;       /**< 电池侧功率 Pbat，单位 W */
     uint32_t rx_cnt;
     uint32_t tx_cnt;
     uint32_t err_cnt;
@@ -87,8 +87,17 @@ void supercap_can_rx(uint8_t bus, uint32_t std_id, const uint8_t *data);
 /** 周期调用：更新在线状态并发送控制帧（必要时补发使能帧） */
 void supercap_update(void);
 
-/** 立即发一帧使能请求（板端只能置位，重复请求安全） */
+/** 请求使能：置位运行开关，板端收到 Enable=1 后保持工作 */
 void supercap_send_enable(void);
+
+/**
+ * @brief 请求软下电：发 Enable=0，板端清运行开关并走正常停机流程
+ * @note  停机后需要重新调用 supercap_send_enable()，板端会从自检开始
+ */
+void supercap_disable(void);
+
+/** 1 = 主控当前期望超电工作，0 = 已请求软下电 */
+uint8_t supercap_is_enabled(void);
 
 void supercap_set_budget(uint16_t budget_w);
 uint16_t supercap_get_budget(void);

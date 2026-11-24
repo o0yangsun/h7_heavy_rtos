@@ -86,9 +86,9 @@ static void chassis_update_fdb(void)
 }
 
 /**
- * @brief 用四个底盘电机的转矩电流与转速估算总功率
- * @return 估算功率 W（机械功率除以效率再叠加静态损耗）
- * @note  参数集中在 robot.h 的 CHS_PWR_*，需要与超电实测值对比标定
+ * @brief 用四个底盘电机的输出与转速估算总功率
+ * @return 估算功率 W，模型 P = Kt·I·ω + k1·ω² + k2·I² + C
+ * @note  参数集中在 robot.h 的 CHS_PWR_*，取自 3508 经验值，可用超电实测对照标定
  */
 float chassis_power_estimate(void)
 {
@@ -105,16 +105,17 @@ float chassis_power_estimate(void)
         }
 
         {
-            float i_a = (float)m->measure.real_current * CHS_PWR_CURRENT_A;
-            float tau = i_a * CHS_PWR_KT;
-            float w   = (float)m->measure.speed_rpm_f * CHS_PWR_RPM2RAD;
+            float w  = fabsf((float)m->measure.speed_rpm_f);
+            float il = fabsf((float)s_wheel[i].out);
 
-            /* 机械功率 τ·ω，刹车时为正、反拖时为负，不做绝对值处理 */
-            p += tau * w;
+            p += CHS_PWR_KT_RAW * il * w
+               + CHS_PWR_K1 * w * w
+               + CHS_PWR_K2 * il * il
+               + CHS_PWR_C;
         }
     }
 
-    return (p / CHS_PWR_EFF) + CHS_PWR_P0;
+    return p;
 }
 
 void chassis_get_fdb(chassis_fdb_t *out)
@@ -186,7 +187,6 @@ void StartChassisTask(void const *argument)
 #if CHASSIS_CMD_FROM_CMD_TASK
         {
             cmd_chassis_t c;
-            float scale;
 
             cmd_get_chassis(&c);
 
@@ -208,15 +208,12 @@ void StartChassisTask(void const *argument)
             }
             else
             {
-                /* 功率限幅：PowerTask 按能量缓冲给出 0.3~1.0 的缩放比，无采样时为 1.0 */
-                scale = power_get_scale();
-                if (scale < 0.0f) { scale = 0.0f; }
-                if (scale > 1.0f) { scale = 1.0f; }
-
+                /* 功率限幅移到电流层（见 wheel_ctrl_cb），这里保留原始指令，
+                 * 避免"目标速度被调低"带来的响应迟滞 */
                 s_mode   = CHASSIS_MODE_NORMAL;
-                s_cmd_vx = c.vx * scale;
-                s_cmd_vy = c.vy * scale;
-                s_cmd_vw = c.vw * scale;
+                s_cmd_vx = c.vx;
+                s_cmd_vy = c.vy;
+                s_cmd_vw = c.vw;
             }
         }
 #endif
@@ -605,6 +602,10 @@ static int16_t wheel_ctrl_cb(const dj_motor_measure_t *m, void *ctx)
             w->launching = 0U;
         }
     }
+
+    /* 功率限幅：直接压低电流指令，比缩速度指令响应更快、也更平滑。
+     * 放在斜率限制之前，让限幅引起的变化同样被斜率摊平 */
+    out *= power_get_scale();
 
     /* 输出斜率限制：把电流阶跃摊成斜坡，压平起步冲击而不拖慢目标响应 */
     {
