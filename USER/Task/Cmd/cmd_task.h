@@ -23,13 +23,6 @@ typedef enum
     CMD_MODE_AUTO           /**< 自动/视觉 */
 } cmd_mode_e;
 
-typedef enum
-{
-    CMD_ARM_SRC_USER = 0,   /**< 自定义控制器 */
-    CMD_ARM_SRC_PC,         /**< 上位机 */
-    CMD_ARM_SRC_MCU         /**< 板载自动流程 */
-} cmd_arm_src_e;
-
 typedef struct
 {
     float vx;               /**< mm/s，正 = 前进 */
@@ -39,21 +32,7 @@ typedef struct
     uint8_t online;         /**< 1 = 指令有效 */
 } cmd_chassis_t;
 
-typedef struct
-{
-    float x;                /**< mm */
-    float y;                /**< mm */
-    float z;                /**< mm */
-    float pitch;            /**< rad */
-    float roll;             /**< rad */
-    float gripper;          /**< 0=闭合 1=张开 */
-    cmd_arm_src_e src;
-    uint8_t enabled;        /**< 1 = 机械臂使能 */
-    uint8_t online;
-} cmd_arm_t;
-
 extern volatile cmd_chassis_t g_cmd_chassis;
-extern volatile cmd_arm_t     g_cmd_arm;
 
 typedef struct
 {
@@ -71,9 +50,15 @@ extern volatile cmd_diag_t g_cmd_diag;
 /** 键鼠输入，PC 控车预留 */
 void cmd_set_keyboard(uint16_t key_code, int16_t mouse_x, int16_t mouse_y, int16_t mouse_z);
 
+/**
+ * @brief 超电使能请求
+ * @return 1 = 请求超电工作（sw2 下档），0 = 请求停机
+ * @note  ENABLE_SUPERCAP_BY_SW2 为 0 时恒返回 1
+ */
+uint8_t cmd_get_supercap_request(void);
+
 /** 下游读取接口，拷贝一份返回 */
 void cmd_get_chassis(cmd_chassis_t *out);
-void cmd_get_arm(cmd_arm_t *out);
 
 #ifdef __cplusplus
 }

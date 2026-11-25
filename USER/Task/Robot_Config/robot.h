@@ -152,13 +152,34 @@ typedef struct
 #define CMD_MAX_VY                  5000.0f     /* mm/s */
 #define CMD_MAX_VR                  8.0f        /* rad/s */
 #define CMD_SPIN_VW                 3.0f        /* rad/s */
-#define CMD_RC_ACC_XY               4.0f        /* mm/s per ms */
-#define CMD_RC_ACC_W                0.008f      /* rad/s per ms */
+#define CMD_RC_ACC_XY               2.0f        /* mm/s per ms */
+#define CMD_RC_ACC_W                0.005f      /* rad/s per ms */
+
+/* 起步软启动：指令零延时，只限制起步阶段的电流上限。
+ * 目标从 0 变为非 0 后 CHS_LAUNCH_MS 内，输出上限从 RATIO 线性放开到 100% */
+#define CHS_LAUNCH_MS               120U
+#define CHS_LAUNCH_RATIO            0.55f
+
+/* 输出斜率限制：每 1ms 电流指令最大变化量（满量程 16384，400 约 41ms 爬满）。
+ * 只压电流阶跃，不改变目标速度与稳态，起步冲击被摊平 */
+#define CHS_OUT_SLEW                400.0f
+
+/* 3508 功率模型（raw 单位，取自开源舵轮步兵参数）
+ * P = Kt·I·ω + k1·ω² + k2·I² + C
+ *   I 为 PID 输出原始值（±16384），ω 为转子转速 rpm */
+#define CHS_PWR_KT_RAW              1.575e-06f      /* 机械功率系数，按本车高速点标定 */
+#define CHS_PWR_K1                  1.453e-07f      /* 铁损/摩擦系数 */
+#define CHS_PWR_K2                  1.23e-07f       /* 铜损系数 */
+#define CHS_PWR_C                   1.4f            /* 单电机静态损耗 W，待机实测标定 */
 
 /* -------------------------------- 功率参数 -------------------------------- */
 #define POWER_PERIOD_MS             10U
-#define POWER_LIMIT_W               50.0f
+#define POWER_LIMIT_W               47.0f       /* 主控硬上限，比较对象是电池侧 Pbat */
+#define SUPERCAP_BUDGET_W           47.0f       /* 下发给超电板的电池侧功率预算 W，板端目标 = 45W */
 #define POWER_BUFFER_MAX_J          60.0f
+/* 功率一阶低通系数：超电上报的 Pbat+Pcap 在充放电切换时会跳变，
+ * 10ms 周期下 alpha=0.1 约等于 100ms 时间常数 */
+#define POWER_LPF_ALPHA             0.1f
 
 /* -------------------------------- 姿态参数 -------------------------------- */
 #define INS_PERIOD_MS               1U

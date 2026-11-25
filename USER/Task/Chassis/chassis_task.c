@@ -28,6 +28,10 @@ typedef struct
     volatile float     act_rpm;
     volatile int16_t   out;
     float              sign;
+    float              ref_prev;      /**< 上周期目标绝对值，用于检测从 0 起步 */
+    uint32_t           launch_tick;   /**< 起步时刻 ms */
+    uint8_t            launching;     /**< 1 = 软启动进行中 */
+    float              out_last;      /**< 上周期输出，用于斜率限制 */
 } chs_wheel_t;
 
 static chs_wheel_t            s_wheel[CHS_WHEEL_NUM];
@@ -79,6 +83,39 @@ static void chassis_update_fdb(void)
         s_fdb.rpm_act[i] = s_wheel[i].act_rpm;
         s_fdb.out[i]     = s_wheel[i].out;
     }
+}
+
+/**
+ * @brief 用四个底盘电机的输出与转速估算总功率
+ * @return 估算功率 W，模型 P = Kt·I·ω + k1·ω² + k2·I² + C
+ * @note  参数集中在 robot.h 的 CHS_PWR_*，取自 3508 经验值，可用超电实测对照标定
+ */
+float chassis_power_estimate(void)
+{
+    float   p = 0.0f;
+    uint8_t i;
+
+    for (i = 0U; i < CHS_WHEEL_NUM; i++)
+    {
+        dj_motor_object_t *m = s_wheel[i].motor;
+
+        if ((m == NULL) || (m->measure.online == 0U))
+        {
+            continue;
+        }
+
+        {
+            float w  = fabsf((float)m->measure.speed_rpm_f);
+            float il = fabsf((float)s_wheel[i].out);
+
+            p += CHS_PWR_KT_RAW * il * w
+               + CHS_PWR_K1 * w * w
+               + CHS_PWR_K2 * il * il
+               + CHS_PWR_C;
+        }
+    }
+
+    return p;
 }
 
 void chassis_get_fdb(chassis_fdb_t *out)
@@ -150,7 +187,6 @@ void StartChassisTask(void const *argument)
 #if CHASSIS_CMD_FROM_CMD_TASK
         {
             cmd_chassis_t c;
-            float scale;
 
             cmd_get_chassis(&c);
 
@@ -172,15 +208,12 @@ void StartChassisTask(void const *argument)
             }
             else
             {
-                /* 功率限幅：PowerTask 按能量缓冲给出 0.3~1.0 的缩放比，无采样时为 1.0 */
-                scale = power_get_scale();
-                if (scale < 0.0f) { scale = 0.0f; }
-                if (scale > 1.0f) { scale = 1.0f; }
-
+                /* 功率限幅移到电流层（见 wheel_ctrl_cb），这里保留原始指令，
+                 * 避免"目标速度被调低"带来的响应迟滞 */
                 s_mode   = CHASSIS_MODE_NORMAL;
-                s_cmd_vx = c.vx * scale;
-                s_cmd_vy = c.vy * scale;
-                s_cmd_vw = c.vw * scale;
+                s_cmd_vx = c.vx;
+                s_cmd_vy = c.vy;
+                s_cmd_vw = c.vw;
             }
         }
 #endif
@@ -515,6 +548,15 @@ static int16_t wheel_ctrl_cb(const dj_motor_measure_t *m, void *ctx)
         }
     }
 
+    /* 起步检测：目标从 0 变为非 0 时打开软启动窗口 */
+    if ((fabsf(w->ref_rpm) > 1.0f) && (w->ref_prev <= 1.0f))
+    {
+        w->launch_tick = HAL_GetTick();
+        w->launching   = 1U;
+    }
+
+    w->ref_prev = fabsf(w->ref_rpm);
+
     out = pid_calculate(w->pid_speed, w->act_rpm, w->ref_rpm);
 
     /* 静摩擦补偿：仅当输出与目标同向且幅值不足时补到最小有效值，
@@ -534,6 +576,51 @@ static int16_t wheel_ctrl_cb(const dj_motor_measure_t *m, void *ctx)
         {
             out = -CHS_SPEED_MIN_OUT;
         }
+    }
+
+    /* 起步软启动：只压启动窗口内的输出上限，指令本身零延时 */
+    if (w->launching != 0U)
+    {
+        uint32_t el = HAL_GetTick() - w->launch_tick;
+
+        if (el < CHS_LAUNCH_MS)
+        {
+            float lim = CHS_SPEED_MAX * (CHS_LAUNCH_RATIO
+                      + (1.0f - CHS_LAUNCH_RATIO) * (float)el / (float)CHS_LAUNCH_MS);
+
+            if (out > lim)
+            {
+                out = lim;
+            }
+            else if (out < -lim)
+            {
+                out = -lim;
+            }
+        }
+        else
+        {
+            w->launching = 0U;
+        }
+    }
+
+    /* 功率限幅：直接压低电流指令，比缩速度指令响应更快、也更平滑。
+     * 放在斜率限制之前，让限幅引起的变化同样被斜率摊平 */
+    out *= power_get_scale();
+
+    /* 输出斜率限制：把电流阶跃摊成斜坡，压平起步冲击而不拖慢目标响应 */
+    {
+        float delta = out - w->out_last;
+
+        if (delta > CHS_OUT_SLEW)
+        {
+            out = w->out_last + CHS_OUT_SLEW;
+        }
+        else if (delta < -CHS_OUT_SLEW)
+        {
+            out = w->out_last - CHS_OUT_SLEW;
+        }
+
+        w->out_last = out;
     }
 
     w->out = (int16_t)(out * w->sign);
