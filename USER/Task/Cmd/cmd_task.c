@@ -20,7 +20,6 @@
 /* ------------------------------- 全局变量 -------------------------------- */
 
 volatile cmd_chassis_t g_cmd_chassis;
-volatile cmd_arm_t     g_cmd_arm;
 volatile cmd_diag_t    g_cmd_diag;
 
 static task_stat_t    s_stat;
@@ -115,17 +114,17 @@ static void cmd_rc_apply(void)
     g_cmd_chassis.online = ((s_mode == CMD_MODE_RC) || (s_mode == CMD_MODE_SPIN)) ? 1U : 0U;
 }
 
+#if ENABLE_SUPERCAP_BY_SW2
+static volatile uint8_t s_supercap_req = 0U;   /* 1 = 请求超电工作 */
+
 /**
- * @brief 拨杆到机械臂状态
- * @note  DT7 只有 sw1/sw2，机械臂使能固定由 sw1 上档控制
+ * @brief sw2 下档作为超电使能请求，其他档位请求停机
  */
-static void cmd_arm_apply(uint8_t rc_online)
+static void cmd_supercap_apply(uint8_t rc_online)
 {
-    g_cmd_arm.enabled = ((rc_online != 0U) && (s_rc.sw1 == RC_UP)) ? 1U : 0U;
-    g_cmd_arm.online  = rc_online;
-    g_cmd_arm.src     = CMD_ARM_SRC_USER;
-    g_cmd_arm.gripper = 0.0f;
+    s_supercap_req = ((rc_online != 0U) && (s_rc.sw2 == RC_DN)) ? 1U : 0U;
 }
+#endif
 
 /**
  * @brief 底盘模式判定
@@ -160,19 +159,20 @@ void cmd_set_keyboard(uint16_t key_code, int16_t mouse_x, int16_t mouse_y, int16
     s_mz  = mouse_z;
 }
 
+uint8_t cmd_get_supercap_request(void)
+{
+#if ENABLE_SUPERCAP_BY_SW2
+    return s_supercap_req;
+#else
+    return 1U;
+#endif
+}
+
 void cmd_get_chassis(cmd_chassis_t *out)
 {
     if (out != 0)
     {
         memcpy(out, (const void *)&g_cmd_chassis, sizeof(cmd_chassis_t));
-    }
-}
-
-void cmd_get_arm(cmd_arm_t *out)
-{
-    if (out != 0)
-    {
-        memcpy(out, (const void *)&g_cmd_arm, sizeof(cmd_arm_t));
     }
 }
 
@@ -190,7 +190,6 @@ void StartCmdTask(void const *argument)
 
     memset(&s_rc, 0, sizeof(s_rc));
     memset((void *)&g_cmd_chassis, 0, sizeof(g_cmd_chassis));
-    memset((void *)&g_cmd_arm, 0, sizeof(g_cmd_arm));
     memset((void *)&g_cmd_diag, 0, sizeof(g_cmd_diag));
     task_stat_init(&s_stat, CMD_PERIOD_MS);
 
@@ -248,7 +247,9 @@ void StartCmdTask(void const *argument)
 
         /* 生成指令 */
         cmd_rc_apply();
-        cmd_arm_apply(rc_online);
+    #if ENABLE_SUPERCAP_BY_SW2
+    cmd_supercap_apply(rc_online);
+#endif
 
         /* 诊断 */
         g_cmd_diag.loop_cnt = s_stat.loop_cnt;

@@ -14,6 +14,7 @@
 #define ENABLE_IMU                      1   /* BMI088 + EKF */
 #define ENABLE_INA226                   0   /* INA226 母线采样，需先在 CubeMX 启用 I2C1 */
 #define ENABLE_SUPERCAP                 1   /* 超级电容，CAN2 */
+#define ENABLE_SUPERCAP_BY_SW2          1   /* 1 = sw2 下档启用超电，其他档位请求停机 */
 #define ENABLE_REFEREE                  1   /* 裁判系统，USART1 DMA 空闲中断 */
 #define ENABLE_SPECIAL                  0   /* 气泵和泄压阀 */
 #define ENABLE_TRANSMISSION             0   /* 上位机链路发送 */
@@ -54,6 +55,6 @@
 #define ENABLE_MOTOR_CAN_SCAN           1
 
 #define ENABLE_CAN_MONITOR              0   /* 只听模式，不发送、不应答 ACK */
-#define ENABLE_RC_RAMP                  0   /* 遥控速度斜坡 */
+#define ENABLE_RC_RAMP                  0   /* 遥控速度斜坡；改成输出软启动后不需要指令斜坡 */
 
 #endif /* ROBOT_CONFIG_H */

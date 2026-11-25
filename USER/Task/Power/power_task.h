@@ -20,15 +20,17 @@ typedef struct
     float    voltage_v;
     float    current_a;
     float    power_w;
+    float    power_peak;    /**< 上电以来的功率峰值 W */
+    float    power_est;     /**< 电机反馈估算功率 W，未标定 */
     float    buffer_j;      /**< 能量缓冲余量（J） */
     float    scale;         /**< 功率比例 0~1 */
     uint32_t over_cnt;
     uint32_t i2c_err;
-    uint8_t  src;           /**< 0 = 无数据，1 = INA226，2 = 超电上报 */
+    uint8_t  src;           /**< 0 = 无数据，1 = INA226，2 = 超电上报，3 = 电机模型兜底 */
     uint8_t  cap_online;    /**< 超电在线 */
     uint8_t  cap_energy;    /**< 超电剩余能量 % */
-    float    cap_power_w;   /**< 超电功率 W，有符号 */
-    uint16_t cap_chassis_w; /**< 超电上报的底盘功率 W */
+    float    bat_power_w;   /**< 电池侧功率 W（超电 0x220 上报） */
+    float    total_power_w; /**< 总线总功率 W（Pbat + Pcap） */
 } power_diag_t;
 
 extern volatile power_diag_t g_power_diag;
