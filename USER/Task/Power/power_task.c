@@ -166,18 +166,25 @@ void StartPowerTask(void const *argument)
         /* 直接限幅，不做能量缓冲。
          * 比赛按裁判系统的 60J 缓冲判罚，软件侧再预支一遍等于双重冒险，
          * 这里超限立即按比例压低，低于 90% 才恢复，中间区间保持以避免抖动 */
-        if (g_power_diag.src == 0U)
         {
-            s_scale = 1.0f;
-        }
-        else if (p > POWER_LIMIT_W)
-        {
-            s_scale = float_constrain(POWER_LIMIT_W / p, 0.2f, 1.0f);
-            g_power_diag.over_cnt++;
-        }
-        else if (p < (POWER_LIMIT_W * 0.9f))
-        {
-            s_scale = 1.0f;
+            /* 前馈：模型估算的负载，加速瞬间可能先于 Pbat 上升；
+             * 稳态仍以实测为准，两者取大值作为限幅判据 */
+            float p_est  = chassis_power_estimate();
+            float p_ctrl = (p_est > p) ? p_est : p;
+
+            if (g_power_diag.src == 0U)
+            {
+                s_scale = 1.0f;
+            }
+            else if (p_ctrl > POWER_LIMIT_W)
+            {
+                s_scale = float_constrain(POWER_LIMIT_W / p_ctrl, 0.2f, 1.0f);
+                g_power_diag.over_cnt++;
+            }
+            else if (p_ctrl < (POWER_LIMIT_W * 0.9f))
+            {
+                s_scale = 1.0f;
+            }
         }
         /* 90%~100% 区间保持上一周期的值，形成迟滞 */
 

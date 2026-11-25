@@ -172,7 +172,7 @@ typedef struct
 /* -------------------------------- 功率参数 -------------------------------- */
 #define POWER_PERIOD_MS             10U
 #define POWER_LIMIT_W               47.0f       /* 主控硬上限，比较对象是电池侧 Pbat */
-#define SUPERCAP_BUDGET_W           47.0f       /* 下发给超电板的电池侧功率预算 W */
+#define SUPERCAP_BUDGET_W           47.0f       /* 下发给超电板的电池侧功率预算 W，板端目标 = 45W */
 #define POWER_BUFFER_MAX_J          60.0f
 /* 功率一阶低通系数：超电上报的 Pbat+Pcap 在充放电切换时会跳变，
  * 10ms 周期下 alpha=0.1 约等于 100ms 时间常数 */

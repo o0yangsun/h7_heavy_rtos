@@ -6,6 +6,7 @@
   */
 
 #include "supercap_task.h"
+#include "cmd_task.h"
 #include "dj_motor.h"
 #include "log_uart.h"
 #include "robot.h"
@@ -151,6 +152,33 @@ void supercap_update(void)
     {
         g_supercap_fdb.online = 0U;
     }
+
+#if ENABLE_SUPERCAP_BY_SW2
+    /* sw2 下档 = 超电参与：电池按 budget 出力，超电补差额（并行供电）；
+     * sw2 上档/中档 = 请求停机，底盘完全由电池承担 */
+    {
+        uint8_t req = cmd_get_supercap_request();
+
+        if (req == 0U)
+        {
+            if ((s_want_enable != 0U)
+                || (s_last_enable_tick == 0U)
+                || ((now - s_last_enable_tick) >= SUPERCAP_ENABLE_RESEND_MS))
+            {
+                supercap_disable();
+            }
+
+            return;
+        }
+
+        if (s_want_enable == 0U)
+        {
+            supercap_send_enable();
+        }
+    }
+#endif
+
+    s_cmd.budget_w = (uint16_t)SUPERCAP_BUDGET_W;
 
     if (s_want_enable == 0U)
     {
