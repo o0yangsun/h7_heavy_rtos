@@ -126,6 +126,43 @@ static void cmd_supercap_apply(uint8_t rc_online)
 }
 #endif
 
+#if ENABLE_FRICTION_BY_SW1
+static volatile uint8_t s_friction_req = 0U;   /* 1 = 请求启动摩擦轮 */
+
+/**
+ * @brief sw1 上拨作为摩擦轮启动请求，其他档位请求停止
+ */
+static void cmd_friction_apply(uint8_t rc_online)
+{
+    s_friction_req = ((rc_online != 0U) && (s_rc.sw1 == RC_UP)) ? 1U : 0U;
+}
+#endif
+
+#if ENABLE_GIMBAL_BY_SW1
+static volatile uint8_t s_gimbal_req = 0U;     /* 1 = 请求云台锁头 */
+
+/**
+ * @brief sw1 下拨作为云台锁头请求，其他档位请求松开
+ * @note  下拨同时是底盘的陀螺模式，云台靠陀螺反馈保持绝对方位，相对底盘反向补偿
+ */
+static void cmd_gimbal_apply(uint8_t rc_online)
+{
+    s_gimbal_req = ((rc_online != 0U) && (s_rc.sw1 == RC_DN)) ? 1U : 0U;
+}
+#endif
+
+#if ENABLE_PITCH_BY_WHEEL
+static volatile uint8_t s_pitch_req = 0U;      /* 1 = 允许 pitch 出力 */
+
+/**
+ * @brief sw2 上档是整车失能，此时 pitch 一并松开，其余档位允许出力
+ */
+static void cmd_pitch_apply(uint8_t rc_online)
+{
+    s_pitch_req = ((rc_online != 0U) && (s_rc.sw2 != RC_UP)) ? 1U : 0U;
+}
+#endif
+
 /**
  * @brief 底盘模式判定
  *
@@ -166,6 +203,43 @@ uint8_t cmd_get_supercap_request(void)
 #else
     return 1U;
 #endif
+}
+
+uint8_t cmd_get_friction_request(void)
+{
+#if ENABLE_FRICTION_BY_SW1
+    return s_friction_req;
+#else
+    return 1U;
+#endif
+}
+
+uint8_t cmd_get_gimbal_request(void)
+{
+#if ENABLE_GIMBAL_BY_SW1
+    return s_gimbal_req;
+#else
+    return 1U;
+#endif
+}
+
+uint8_t cmd_get_pitch_request(void)
+{
+#if ENABLE_PITCH_BY_WHEEL
+    return s_pitch_req;
+#else
+    return 0U;
+#endif
+}
+
+int16_t cmd_get_wheel(void)
+{
+    return s_rc.wheel;
+}
+
+int16_t cmd_get_ch4(void)
+{
+    return s_rc.ch4;
 }
 
 void cmd_get_chassis(cmd_chassis_t *out)
@@ -249,6 +323,15 @@ void StartCmdTask(void const *argument)
         cmd_rc_apply();
     #if ENABLE_SUPERCAP_BY_SW2
     cmd_supercap_apply(rc_online);
+#endif
+    #if ENABLE_FRICTION_BY_SW1
+    cmd_friction_apply(rc_online);
+#endif
+    #if ENABLE_GIMBAL_BY_SW1
+    cmd_gimbal_apply(rc_online);
+#endif
+    #if ENABLE_PITCH_BY_WHEEL
+    cmd_pitch_apply(rc_online);
 #endif
 
         /* 诊断 */

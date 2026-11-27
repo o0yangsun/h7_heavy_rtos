@@ -9,6 +9,7 @@
 #include "dj_motor.h"
 #include "pid.h"
 #include "log_uart.h"
+#include "cmd_task.h"
 #include "robot.h"
 #include "robot_config.h"
 #include "user_lib.h"
@@ -46,23 +47,25 @@ typedef struct
 
 typedef struct
 {
-    uint8_t bus;
-    uint8_t id;
-    float   sign;
-    float   angle_kp;
-    float   angle_max;
-    float   speed_kp;
-    float   speed_ki;
-    float   speed_ilim;
-    float   max_volt;
+    uint8_t          bus;
+    uint8_t          id;
+    dj_motor_type_e  type;          /**< GM6020 电压驱动 / 3508 电流驱动 */
+    float            gear;          /**< 转子到输出轴减速比，直驱填 1.0 */
+    float            sign;
+    float            angle_kp;
+    float            angle_max;
+    float            speed_kp;
+    float            speed_ki;
+    float            speed_ilim;
+    float            max_out;       /**< 3508 为电流、GM6020 为电压 */
 } gim_axis_cfg_t;
 
 static const gim_axis_cfg_t s_axis_cfg[AXIS_COUNT] =
 {
-    {GIM_YAW_BUS,   GIM_YAW_ID,   GIM_YAW_SIGN,   YAW_ANGLE_KP,   YAW_ANGLE_MAX,
-     YAW_SPEED_KP,   YAW_SPEED_KI,   YAW_SPEED_ILIM,   YAW_MAX_VOLT},
-    {GIM_PITCH_BUS, GIM_PITCH_ID, GIM_PITCH_SIGN, PITCH_ANGLE_KP, PITCH_ANGLE_MAX,
-     PITCH_SPEED_KP, PITCH_SPEED_KI, PITCH_SPEED_ILIM, PITCH_MAX_VOLT},
+    {GIM_YAW_BUS,   GIM_YAW_ID,   DJ_MOTOR_GM6020, 1.0f,                 GIM_YAW_SIGN,
+     YAW_ANGLE_KP,   YAW_ANGLE_MAX,   YAW_SPEED_KP,   YAW_SPEED_KI,   YAW_SPEED_ILIM,   YAW_MAX_VOLT},
+    {GIM_PITCH_BUS, GIM_PITCH_ID, DJ_MOTOR_M3508,  GIM_PITCH_GEAR_RATIO, GIM_PITCH_SIGN,
+     PITCH_ANGLE_KP, PITCH_ANGLE_MAX, PITCH_SPEED_KP, PITCH_SPEED_KI, PITCH_SPEED_ILIM, PITCH_MAX_OUT},
 };
 
 static gim_axis_t           s_axis[AXIS_COUNT];
@@ -179,12 +182,54 @@ void StartGimbalTask(void const *argument)
                    (int)GIMBAL_DEBUG_AXIS);
     }
 
+#if ENABLE_GIMBAL_BY_SW1
+    /* 由 sw1 决定是否出力，上电保持松开 */
+    s_mode  = GIMBAL_MODE_RELAX;
+    s_homed = true;
+#else
     /* 上电先回中，目标从当前角度开始 */
     s_mode = GIMBAL_MODE_HOME;
+#endif
 
     for (;;)
     {
         uint32_t now = HAL_GetTick();
+
+#if ENABLE_GIMBAL_BY_SW1 || ENABLE_PITCH_BY_WHEEL
+        /* 两轴各自有开关，任一轴需要出力就进入角度控制，全部关闭才松开。
+         * yaw 由 sw1 下档控制，靠陀螺反馈保持绝对方位；
+         * pitch 由 sw2 非上档控制，目标角由拨轮增量调整。 */
+        {
+            uint8_t need = 0U;
+
+#if ENABLE_GIMBAL_BY_SW1
+            if (cmd_get_gimbal_request() != 0U)
+            {
+                need = 1U;
+            }
+#endif
+#if ENABLE_PITCH_BY_WHEEL
+            if (cmd_get_pitch_request() != 0U)
+            {
+                need = 1U;
+            }
+#endif
+
+            if (need != 0U)
+            {
+                if (s_mode == GIMBAL_MODE_RELAX)
+                {
+                    s_mode = GIMBAL_MODE_ANGLE;
+                    s_axis[AXIS_YAW].target_deg   = 0.0f;
+                    s_axis[AXIS_PITCH].target_deg = 0.0f;
+                }
+            }
+            else if (s_mode != GIMBAL_MODE_RELAX)
+            {
+                s_mode = GIMBAL_MODE_RELAX;
+            }
+        }
+#endif
 
         /* 模式切换时清 PID，避免和 1kHz 回调竞争 */
         if (s_mode != last_mode)
@@ -261,6 +306,25 @@ void StartGimbalTask(void const *argument)
 #endif
                 }
 #endif
+#if ENABLE_PITCH_BY_WHEEL
+                /* 拨轮直接给 pitch 目标角速度，回中即停 */
+                if (cmd_get_pitch_request() != 0U)
+                {
+                    int16_t wheel = cmd_get_wheel();
+                    float   dps   = 0.0f;
+
+                    if ((wheel > PITCH_WHEEL_DEADBAND) || (wheel < -PITCH_WHEEL_DEADBAND))
+                    {
+                        dps = ((float)wheel / PITCH_WHEEL_RAW_MAX) * PITCH_WHEEL_MAX_DPS;
+                    }
+
+                    s_axis[AXIS_PITCH].target_dps = dps;
+                }
+                else
+                {
+                    s_axis[AXIS_PITCH].target_dps = 0.0f;
+                }
+#endif
                 break;
 
             case GIMBAL_MODE_SPEED:
@@ -333,7 +397,7 @@ static void axis_pid_init(gim_axis_t *ax)
                                              cfg->angle_max, cfg->angle_max,
                                              PID_Derivative_On_Measurement);
     speed_cfg = (pid_config_t)INIT_PID_CONFIG(cfg->speed_kp, cfg->speed_ki, 0.0f,
-                                             cfg->speed_ilim, cfg->max_volt,
+                                             cfg->speed_ilim, cfg->max_out,
                                              PID_Integral_Limit
                                              | PID_Derivative_On_Measurement);
 
@@ -348,7 +412,7 @@ static void gimbal_motor_register(void)
     for (uint8_t i = 0; i < AXIS_COUNT; i++)
     {
         memset(&cfg, 0, sizeof(cfg));
-        cfg.type    = DJ_MOTOR_GM6020;
+        cfg.type    = s_axis_cfg[i].type;
         cfg.bus     = s_axis_cfg[i].bus;
         cfg.id      = s_axis_cfg[i].id;
         cfg.control = axis_ctrl_cb;
@@ -412,13 +476,15 @@ static int16_t axis_control(gim_axis_t *ax, const dj_motor_measure_t *m)
 #else
         ax->center_ecd = m->ecd;
 #endif
+#if GIM_USE_IMU_FEEDBACK
         {
             ins_attitude_t att;
 
             ins_get_attitude(&att);
-            ax->center_ins_deg = ((axis == AXIS_YAW) ? att.yaw_total : att.roll)
+            ax->center_ins_deg = ((axis == AXIS_YAW) ? att.yaw_total : att.pitch)
                                * GIM_RAD2DEG;
         }
+#endif
 
         ax->center_ready = true;
         /* 中位确定前不输出 */
@@ -443,7 +509,7 @@ static int16_t axis_control(gim_axis_t *ax, const dj_motor_measure_t *m)
 
         if (att.valid != 0U)
         {
-            float cur_deg = ((axis == AXIS_YAW) ? att.yaw_total : att.roll) * GIM_RAD2DEG;
+            float cur_deg = ((axis == AXIS_YAW) ? att.yaw_total : att.pitch) * GIM_RAD2DEG;
 
             if (!ax->ins_locked)
             {
@@ -463,13 +529,18 @@ static int16_t axis_control(gim_axis_t *ax, const dj_motor_measure_t *m)
         {
             /* IMU 未就绪时退回编码器，保证云台仍可回中 */
             ang = ecd_to_rel_deg(m->ecd, ax->center_ecd);
-            rpm = (float)m->speed_rpm;
+            rpm = m->speed_rpm_f;
         }
     }
 #else
     ang = ecd_to_rel_deg(m->ecd, ax->center_ecd);
-    rpm = (float)m->speed_rpm;
+    rpm = m->speed_rpm_f;
 #endif
+
+    /* 统一到逻辑方向：sign 同时作用于反馈和输出，与底盘一致。
+     * 只反输出会造成速度环正反馈，pitch 的 sign 为 -1 时必然发散。 */
+    ang *= ax->sign;
+    rpm *= ax->sign;
 
     if (axis == AXIS_YAW)
     {
@@ -490,17 +561,89 @@ static int16_t axis_control(gim_axis_t *ax, const dj_motor_measure_t *m)
         return 0;
     }
 
-    if (s_mode == GIMBAL_MODE_SPEED)
+#if ENABLE_PITCH_OPENLOOP
+    if (axis == AXIS_PITCH)
     {
-        ref_rpm = ax->target_dps / RPM_2_ANGLE_PER_SEC;
-        pid_clear(ax->pid_angle);        /* 速度模式不用外环 */
+        /* 拨轮回中：按转速反向出力做阻尼刹车，增益低不会自激；
+         * 拨轮偏离中位：开环给恒定电流，转向由拨轮方向决定。 */
+        if (fabsf(ax->target_dps) < 0.5f)
+        {
+            if (fabsf(rpm) > PITCH_BRAKE_RPM_MIN)
+            {
+                out = -rpm * PITCH_BRAKE_KP;
+
+                if (out > PITCH_BRAKE_MAX)
+                {
+                    out = PITCH_BRAKE_MAX;
+                }
+                else if (out < -PITCH_BRAKE_MAX)
+                {
+                    out = -PITCH_BRAKE_MAX;
+                }
+            }
+            else
+            {
+                out = 0.0f;
+            }
+        }
+        else
+        {
+            float abs_rpm;
+
+            /* 拨轮偏离中位即按恒定电流输出，只有方向由拨轮决定，
+             * 不再按拨杆量做比例调速。 */
+            out = (ax->target_dps > 0.0f) ? PITCH_OPENLOOP_CURRENT
+                                          : -PITCH_OPENLOOP_CURRENT;
+
+            /* 接近转速上限时线性降流：达到阈值的 DERATE 比例后按比例减小，
+             * 到阈值时降到 0。相比硬断流不会在阈值附近反复启停。 */
+            abs_rpm = fabsf(rpm);
+
+            if (abs_rpm > (PITCH_OPENLOOP_MAX_RPM * PITCH_OPENLOOP_DERATE))
+            {
+                float ratio = (PITCH_OPENLOOP_MAX_RPM - abs_rpm)
+                            / (PITCH_OPENLOOP_MAX_RPM * (1.0f - PITCH_OPENLOOP_DERATE));
+
+                if (ratio < 0.0f)
+                {
+                    ratio = 0.0f;
+                }
+
+                out *= ratio;
+            }
+        }
+
+        send = (int16_t)(out * ax->sign);
+        ax->out_volt = send;
+
+        pid_clear(ax->pid_angle);
+        pid_clear(ax->pid_speed);
+
+        return send;
+    }
+#endif
+
+    if ((s_mode == GIMBAL_MODE_SPEED) || (axis == AXIS_PITCH))
+    {
+        /* 回中静止时清积分，避免噪声累积成突加力矩 */
+        if ((fabsf(ax->target_dps) < 0.5f) && (fabsf(rpm) < 2.0f))
+        {
+            pid_clear(ax->pid_speed);
+            ax->out_volt = 0;
+            return 0;
+        }
+
+        /* pitch 走纯速度控制：拨轮直接给输出轴角速度，不依赖角度反馈。
+         * 目标换算到转子 rpm，减速比由轴配置决定，直驱为 1。 */
+        ref_rpm = ax->target_dps / RPM_2_ANGLE_PER_SEC * s_axis_cfg[axis].gear;
+        pid_clear(ax->pid_angle);
     }
     else
     {
         /* HOME / ANGLE：角度外环输出目标角速度 */
         float ref_dps = pid_calculate(ax->pid_angle, ang, ax->target_deg);
 
-        ref_rpm = ref_dps / RPM_2_ANGLE_PER_SEC;
+        ref_rpm = ref_dps / RPM_2_ANGLE_PER_SEC * s_axis_cfg[axis].gear;
     }
 
     out = pid_calculate(ax->pid_speed, rpm, ref_rpm);
@@ -527,11 +670,25 @@ static int16_t axis_ctrl_cb(const dj_motor_measure_t *m, void *ctx)
 static bool axis_active(uint8_t axis)
 {
 #if GIMBAL_DEBUG_AXIS == 1
-    return (axis == AXIS_YAW);
+    if (axis != AXIS_YAW) return false;
 #elif GIMBAL_DEBUG_AXIS == 2
-    return (axis == AXIS_PITCH);
-#else
+    if (axis != AXIS_PITCH) return false;
+#endif
+
+#if ENABLE_GIMBAL_BY_SW1
+    if (axis == AXIS_YAW)
+    {
+        return (cmd_get_gimbal_request() != 0U);
+    }
+#endif
+
+#if ENABLE_PITCH_BY_WHEEL
+    if (axis == AXIS_PITCH)
+    {
+        return (cmd_get_pitch_request() != 0U);
+    }
+#endif
+
     (void)axis;
     return true;
-#endif
 }

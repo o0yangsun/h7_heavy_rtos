@@ -15,6 +15,8 @@
 #define ENABLE_INA226                   0   /* INA226 母线采样，需先在 CubeMX 启用 I2C1 */
 #define ENABLE_SUPERCAP                 1   /* 超级电容，CAN2 */
 #define ENABLE_SUPERCAP_BY_SW2          1   /* 1 = sw2 下档启用超电，其他档位请求停机 */
+#define ENABLE_FRICTION                 1   /* 三个摩擦轮，CAN3 */
+#define ENABLE_TRIGGER                  1   /* 拨弹电机，CAN2 */
 #define ENABLE_REFEREE                  0   /* 裁判系统 */
 #define ENABLE_SPECIAL                  0   /* 气泵和泄压阀 */
 #define ENABLE_TRANSMISSION             0   /* 上位机链路发送 */
@@ -42,8 +44,13 @@
 #define ENABLE_CHASSIS_BENCH            0
 #define CHASSIS_CMD_FROM_CMD_TASK       1   /* 1：指令来自 CmdTask，0：手动注入 */
 
-#define GIMBAL_DEBUG_AXIS               1   /* 0：双轴，1：仅 yaw，2：仅 pitch */
-#define ENABLE_GIMBAL_BENCH             1
+#define GIMBAL_DEBUG_AXIS               0   /* 0：双轴，1：仅 yaw，2：仅 pitch */
+#define ENABLE_GIMBAL_BENCH             0   /* 台架正弦摆动，调云台时置 1 */
+#define ENABLE_GIMBAL_BY_SW1            1   /* 1 = sw1 下档进入锁头，其他档位松开 */
+#define ENABLE_PITCH_BY_WHEEL           1   /* 1 = sw2 非上档时 pitch 跟随拨轮 */
+#define ENABLE_PITCH_OPENLOOP           1   /* 1 = pitch 开环电流，不使用任何反馈 */
+#define ENABLE_FRICTION_BENCH           1   /* 摩擦轮台架：上电延时后定速转动 */
+#define ENABLE_FRICTION_BY_SW1          1   /* 1 = sw1 上拨启动摩擦轮，其他档位停止 */
 
 #define ENABLE_MOTOR_BENCH              0
 #define ENABLE_MOTOR_LOOPBACK           0

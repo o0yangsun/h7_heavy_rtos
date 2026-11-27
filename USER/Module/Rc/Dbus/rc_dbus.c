@@ -56,6 +56,21 @@ uint8_t dbus_data_unpack(const uint8_t *data, uint16_t len)
     rc.sw2   = (uint8_t)((data[5] >> 4) & 0x03U);
     rc.wheel = (int16_t)(((data[16] | ((uint16_t)data[17] << 8)) & 0x07FFU) - 1024);
 
+    /* 拨轮实测输出 -660~660，超出按量程钳位，避免字节错位凑出野值 */
+    if (rc.wheel > RC_DBUS_MAX_VALUE)
+    {
+        rc.wheel = RC_DBUS_MAX_VALUE;
+    }
+    else if (rc.wheel < -RC_DBUS_MAX_VALUE)
+    {
+        rc.wheel = -RC_DBUS_MAX_VALUE;
+    }
+
+    if ((rc.wheel <= 5) && (rc.wheel >= -5))
+    {
+        rc.wheel = 0;
+    }
+
     dbus_data_fdb = rc;
     dbus_heartbeat++;
 

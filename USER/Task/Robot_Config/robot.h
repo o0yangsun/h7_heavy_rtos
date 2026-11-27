@@ -91,13 +91,16 @@ typedef struct
 #define CHS_BENCH_START_DELAY_MS    5000U
 
 /* -------------------------------- 云台参数 -------------------------------- */
-/* 云台反馈源：1 = 陀螺仪角度/角速度（锁头、抗底盘扰动），0 = 电机编码器 */
-#define GIM_USE_IMU_FEEDBACK        1
+/* 云台反馈源：1 = 陀螺仪角度/角速度（锁头、抗底盘扰动），0 = 电机编码器。
+ * 云台尚未安装 IMU，暂用编码器；装好后改回 1 即可恢复锁头。 */
+#define GIM_USE_IMU_FEEDBACK        0
 
 #define GIM_YAW_BUS                 CAN_YAW
-#define GIM_YAW_ID                  1U
+#define GIM_YAW_ID                  3U          /* GM6020 直驱，反馈帧 0x207 */
 #define GIM_PITCH_BUS               CAN_PITCH
-#define GIM_PITCH_ID                1U
+#define GIM_PITCH_ID                5U          /* M3508 经 C620，反馈帧 0x205 */
+/* M3508 直驱云台俯仰轴，无减速箱，转子即输出轴 */
+#define GIM_PITCH_GEAR_RATIO        1.0f
 
 #define GIM_USE_FIXED_CENTER        0
 #define GIM_YAW_CENTER_ECD          0U
@@ -123,14 +126,47 @@ typedef struct
 #define YAW_SPEED_ILIM              8000.0f
 #define YAW_MAX_VOLT                20000.0f
 
-/* pitch 串级参数 */
-#define PITCH_ANGLE_KP              10.0f
+/* pitch 速度环：M3508 直驱，转子转速闭环，输出电流 ±16384。
+ * 拨轮直接给目标角速度，回中即停，不依赖角度反馈。
+ * 直驱时 30°/s 仅对应 5 rpm，误差量级很小，增益需远高于带减速箱的场合。 */
+#define PITCH_ANGLE_KP              10.0f       /* 速度模式下不使用，保留供以后扩展 */
 #define PITCH_ANGLE_MAX             200.0f
-#define PITCH_SPEED_KP              200.0f
-#define PITCH_SPEED_KI              14.0f
+#define PITCH_SPEED_KP              800.0f
+#define PITCH_SPEED_KI              50.0f
 #define PITCH_SPEED_ILIM            8000.0f
-#define PITCH_MAX_VOLT              18000.0f
+#define PITCH_MAX_OUT               16384.0f     /* 3508 电流量程 */
 #define PITCH_GRAVITY_FF            0.0f
+
+/* 拨轮控制 pitch 角速度：满偏对应的输出轴角速度。
+ * DR16 拨轮实测输出 -660~660，与摇杆同量程。 */
+#define PITCH_WHEEL_MAX_DPS         30.0f
+#define PITCH_WHEEL_RAW_MAX         660.0f
+#define PITCH_WHEEL_DEADBAND        60      /* 拨轮回中抖动可达数十，死区取大一些 */
+
+/* 开环调试：拨轮满偏对应的电流占空，无反馈，空载转速由负载决定 */
+#define PITCH_OPENLOOP_CURRENT      1000.0f
+
+/* 开环限速：静摩擦被突破后负载骤降，小电流也能把电机推到数千 rpm。
+ * 达到阈值的 DERATE 比例后开始线性降流，到阈值时降到 0。 */
+#define PITCH_OPENLOOP_MAX_RPM      200.0f
+#define PITCH_OPENLOOP_DERATE       0.6f
+
+/* 回中阻尼刹车：拨轮回中时按转速反向出力，抵抗外力转动。
+ * 增益远低于速度环，避免转速反馈量化噪声被放大成自激。 */
+#define PITCH_BRAKE_KP              25.0f
+#define PITCH_BRAKE_RPM_MIN         5.0f
+#define PITCH_BRAKE_MAX             3000.0f
+
+/* pitch 当前整定结果（M3508 直驱，无减速箱）：
+ *   PITCH_OPENLOOP_CURRENT   1000  恒定电流，不随拨杆量变化
+ *   PITCH_OPENLOOP_MAX_RPM   200   实测稳态转速，约 1200 °/s
+ *   PITCH_OPENLOOP_DERATE    0.6   120 rpm 起线性降流，200 rpm 断流
+ *   PITCH_WHEEL_DEADBAND     60    拨轮回中抖动可达数十，死区需大于它
+ *   PITCH_BRAKE_KP           25    回中阻尼，手转时产生反向阻力
+ *   GIM_PITCH_SIGN          -1.0   方向已上机确认
+ * 开环无限速能力，突破静摩擦后会冲高，故必须保留降流段；
+ * 实测转速在 170~240 rpm 间起伏，属降流环路的固有波动。
+ * 若需真正稳速或定位，应改用速度/角度闭环，增益取 50~80 量级。 */
 
 /* -------------------------------- 遥控参数 -------------------------------- */
 #define CMD_PERIOD_MS               1U
@@ -223,6 +259,84 @@ typedef struct
 
 /* -------------------------------- 发射参数 -------------------------------- */
 #define SHOOT_PERIOD_MS             100U
+
+/* 摩擦轮：CAN3 上三个 M3508，ID1~ID3，按输出轴转速闭环。
+ * 反馈为转子转速，除以减速比得到输出轴转速。 */
+#define FRIC_NUM                    3U
+#define FRIC_GEAR_RATIO             (3591.0f / 187.0f)
+
+#define FRIC_ID_1                   1U
+#define FRIC_ID_2                   2U
+#define FRIC_ID_3                   3U
+
+/* 安装方向修正：同时作用于转速反馈和电流输出。
+ * 三个摩擦轮按左右对称安装，右轮与中轮反装取 -1。
+ * 实际转向以台架观察为准，与出弹方向不符时改对应符号。 */
+#define FRIC_DIR_1                  (-1.0f)
+#define FRIC_DIR_2                  (+1.0f)
+#define FRIC_DIR_3                  (+1.0f)
+
+/* 转子 8600 rpm 对应输出轴约 448 rpm */
+#define FRIC_MAX_OUT_RPM            450.0f
+
+/* 速度环参数取自 hero_rtos 的实测整定值，反馈为转子 rpm */
+#define FRIC_SPEED_KP               18.0f
+#define FRIC_SPEED_KI               0.0f
+#define FRIC_SPEED_KD               0.001f
+#define FRIC_SPEED_ILIM             2000.0f
+#define FRIC_SPEED_MAX              16384.0f
+/* 有目标时的最小输出幅值，低于此值轮子启不动 */
+#define FRIC_SPEED_MIN_OUT          500.0f
+#define FRIC_SPEED_STATIC_RPM       20.0f
+
+/* 台架：sw1 上拨后三个轮定速转动，用于确认转向和转速 */
+#define FRIC_BENCH_OUT_RPM          300.0f
+#define FRIC_BENCH_START_DELAY_MS   4000U
+/* 启动后从 0 线性升到目标转速的时间，避免电流突变 */
+#define FRIC_SPINUP_MS              8000U
+
+/* 拨弹电机：CAN2 上的 M3508，ID1，反馈帧 0x201。
+ * CAN2 上 yaw 为 GM6020 ID3（0x207），控制帧 0x1FF；拨弹走 0x200，互不冲突。
+ * 参数取自 hero_rtos 实测整定值。 */
+#define TRIGGER_BUS                 CAN_TRIGGER
+#define TRIGGER_ID                  1U
+#define TRIGGER_GEAR_RATIO          (3591.0f / 187.0f)
+/* 拨弹盘转向修正：目标角与反馈同在物理域，符号只作用于最终电流输出。
+ * 取 -1 表示正电流驱动拨弹盘反转，与原装方向相反时使用。 */
+#define TRIGGER_FORWARD_SIGN        (-1.0f)
+
+/* 单发拨弹盘的机械转角，换算到电机轴需乘减速比 */
+#define TRIGGER_SHOT_DEG            120.0f
+
+/* 角度环：输入电机轴累计角度，输出目标转速 */
+#define TRIGGER_ANGLE_KP            2.0f
+#define TRIGGER_ANGLE_MAX           10000.0f
+/* 速度环：输入转子 rpm，输出电流 */
+#define TRIGGER_SPEED_KP            5.0f
+#define TRIGGER_SPEED_KI            3.0f
+#define TRIGGER_SPEED_ILIM          1500.0f
+#define TRIGGER_SPEED_MAX           16384.0f
+
+/* 连发转速与反转到位的判定容差 */
+#define TRIGGER_AUTO_RPM            2000.0f
+#define TRIGGER_POS_TOL_DEG         30.0f
+
+/* 目标与反馈角度偏差超过该值视为状态异常，重置目标止损。
+ * 单发步长为 120°×19.2≈2304°，取 8000° 留出三倍余量。 */
+#define TRIGGER_TARGET_LIMIT_DEG    8000.0f
+
+/* 目标角允许领先实际角度的发数。连续推杆时目标会不断累加，
+ * 限制领先量可避免电机长时间高速追击一个很远的目标。 */
+#define TRIGGER_TARGET_LEAD_SHOTS   2.0f
+
+/* ch4 摇杆触发阈值：上推单发、下推反转、中间保持。
+ * REARM 是重新武装阈值，必须回落到该值以下才允许下一次单发，
+ * 否则摇杆在 SINGLE 附近抖动会连续累加目标角。 */
+#define TRIGGER_CH_SINGLE           400
+#define TRIGGER_CH_REARM            200
+#define TRIGGER_CH_REVERSE          (-400)
+/* 两次单发的最小间隔，防止机械抖动引起的重复触发 */
+#define TRIGGER_MIN_INTERVAL_MS     250U
 
 /* -------------------------------- 串口参数 -------------------------------- */
 #define USART_PERIOD_MS             1U
