@@ -58,13 +58,13 @@ uint8_t trans_send_frame(uint8_t id, const void *data, uint8_t len);
 /** 链路是否在线（收到任意合法帧） */
 uint8_t trans_link_online(void);
 
-/** 读视觉指令快照，valid 已按超时更新 */
+/** 读视觉指令快照，valid 已按超时更新；本轮仅提供接口，控制层尚未接入 */
 void trans_get_vision(trans_vision_cmd_t *out);
 
-/** 读小电脑底盘指令快照 */
+/** 读小电脑底盘指令快照；本轮仅提供接口，底盘尚未接入 */
 void trans_get_pc_chassis(trans_pc_chassis_t *out);
 
-/** 覆盖 0x23 上报的 gimbal_mode，范围 0~3 */
+/** 临时覆盖 0x23 上报的 gimbal_mode，范围 0~3；控制接入后改为按状态机映射 */
 void trans_set_gimbal_mode(uint8_t mode);
 
 void StartTransmissionTask(void const *argument);

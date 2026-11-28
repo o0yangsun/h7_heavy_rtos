@@ -27,6 +27,7 @@ static task_stat_t          s_stat;
 static trans_frame_parser_t s_parser;
 static trans_vision_cmd_t   s_vision;
 static trans_pc_chassis_t   s_pc_chassis;
+/* 视觉联调固定上报 AUTO_AIM；接入云台状态机后改为按模式映射。 */
 static volatile uint8_t     s_gimbal_mode = TRANS_GIMBAL_MODE_REPORT;
 
 static trans_yaw_unwrap_t s_yaw_unwrap;
@@ -35,6 +36,14 @@ static float              s_pitch_deg;
 static float              s_yaw_vel_last_dps;
 static uint32_t           s_yaw_vel_last_ms;
 static float              s_yaw_acc_lpf_dps2;
+
+/* 发射机构与裁判系统未接入：0x24 使用安全占位值。
+ * can_fire 固定 0；拒绝原因填“裁判未就绪”；弹速无测速保持 0；
+ * launcher_state 未知填 255。接入 shoot_task 后替换这些宏。 */
+#define TRANS_SHOOT_CAN_FIRE_PLACEHOLDER        0U
+#define TRANS_SHOOT_REJECT_PLACEHOLDER          ((uint8_t)TRANS_SHOOT_REJECT_REFEREE_NOT_READY)
+#define TRANS_SHOOT_BULLET_SPEED_PLACEHOLDER    0U
+#define TRANS_SHOOT_LAUNCHER_STATE_PLACEHOLDER  255U
 
 static float trans_update_yaw_acc(float yaw_vel_dps, uint32_t now_ms)
 {
@@ -308,6 +317,8 @@ void StartTransmissionTask(void const *argument)
                 uint8_t plen;
 
                 last_tx_23 = now;
+                /* 云台 IMU 尚未接入：fdb 当前来自编码器。
+                 * 云台离线时保持最后连续角，0x23 的 yaw/pitch 可能为 0。 */
                 gimbal_get_fdb(&fdb);
 
                 if (fdb.online[0] != false)
@@ -349,7 +360,12 @@ void StartTransmissionTask(void const *argument)
                 uint8_t plen;
 
                 last_tx_24 = now;
-                plen = trans_msg_build_shoot_status(payload, 0U, 0U, 0U, 255U);
+                plen = trans_msg_build_shoot_status(
+                    payload,
+                    TRANS_SHOOT_CAN_FIRE_PLACEHOLDER,
+                    TRANS_SHOOT_REJECT_PLACEHOLDER,
+                    TRANS_SHOOT_BULLET_SPEED_PLACEHOLDER,
+                    TRANS_SHOOT_LAUNCHER_STATE_PLACEHOLDER);
                 if (trans_send_frame(TRANS_ID_SHOOT_STATUS, payload, plen) != 0U)
                 {
                     g_trans_diag.tx_0x24++;

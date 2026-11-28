@@ -27,6 +27,28 @@ extern "C" {
 #define TRANS_SHOOT_PAYLOAD_LEN     7U
 #define TRANS_CHASSIS_PAYLOAD_LEN   24U
 
+/* 0x13/0x10/0x11/0xE0 本轮未实现：
+ * 0x13 等待云台 IMU 数据源；0x10/0x11 等待底盘反馈/里程计；
+ * 0xE0 等待错误上报需求。 */
+
+/* 0x24 reject_reason 编码：
+ * 1~7 参与开火许可判断，8~10 仅诊断，255 未知。 */
+typedef enum
+{
+    TRANS_SHOOT_REJECT_NONE = 0,
+    TRANS_SHOOT_REJECT_FRICTION_NOT_READY = 1,
+    TRANS_SHOOT_REJECT_HEAT_LIMIT = 2,
+    TRANS_SHOOT_REJECT_TRIGGER_NOT_READY = 3,
+    TRANS_SHOOT_REJECT_TRIGGER_FAULT = 4,
+    TRANS_SHOOT_REJECT_RC_OFFLINE = 5,
+    TRANS_SHOOT_REJECT_REFEREE_NOT_READY = 6,
+    TRANS_SHOOT_REJECT_SYSTEM_FAULT = 7,
+    TRANS_SHOOT_REJECT_NO_AMMO = 8,
+    TRANS_SHOOT_REJECT_LAUNCHER_NOT_INSTALLED = 9,
+    TRANS_SHOOT_REJECT_VISION_NOT_ACTIVE = 10,
+    TRANS_SHOOT_REJECT_UNKNOWN = 255,
+} trans_shoot_reject_e;
+
 typedef struct
 {
     uint8_t  mode;              /**< 0 无目标, 1 有目标, 2 请求开火 */
