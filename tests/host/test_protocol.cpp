@@ -284,6 +284,100 @@ void test_message_limits()
     CHECK_EQ(shoot[6], 255U);
 }
 
+void test_yaw_unwrap()
+{
+    trans_yaw_unwrap_t u;
+    trans_yaw_unwrap_reset(&u);
+
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, 0.0f), 0.0f, 1e-5);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, 10.0f), 10.0f, 1e-5);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, 20.0f), 20.0f, 1e-5);
+
+    trans_yaw_unwrap_reset(&u);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, 170.0f), 170.0f, 1e-5);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, -170.0f), 190.0f, 1e-5);
+
+    trans_yaw_unwrap_reset(&u);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, -170.0f), -170.0f, 1e-5);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, 170.0f), -190.0f, 1e-5);
+
+    trans_yaw_unwrap_reset(&u);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, 179.0f), 179.0f, 1e-5);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, -179.0f), 181.0f, 1e-5);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, -178.0f), 182.0f, 1e-5);
+
+    trans_yaw_unwrap_reset(&u);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, 100.0f), 100.0f, 1e-5);
+    trans_yaw_unwrap_reset(&u);
+    CHECK_NEAR(trans_yaw_unwrap_update(&u, 5.0f), 5.0f, 1e-5);
+
+    const float held = trans_yaw_unwrap_update(
+        &u, std::numeric_limits<float>::quiet_NaN());
+    CHECK_NEAR(held, 5.0f, 1e-5);
+}
+
+void test_freshness()
+{
+    CHECK_EQ(trans_msg_is_fresh(1000U, 1000U, 150U), 1U);
+    CHECK_EQ(trans_msg_is_fresh(1149U, 1000U, 150U), 1U);
+    CHECK_EQ(trans_msg_is_fresh(1150U, 1000U, 150U), 0U);
+    CHECK_EQ(trans_msg_is_fresh(1151U, 1000U, 150U), 0U);
+    CHECK_EQ(trans_msg_is_fresh(0x00000005U, 0xFFFFFFF0U, 150U), 1U);
+    CHECK_EQ(trans_msg_is_fresh(1000U, 1000U, 0U), 0U);
+}
+
+void test_frame_build_limits()
+{
+    std::uint8_t payload[TRANS_GIMBAL_FB_PAYLOAD_LEN] = {0};
+    std::uint8_t out[80];
+
+    CHECK_EQ(trans_frame_build(TRANS_ID_GIMBAL_FB, payload,
+                               TRANS_GIMBAL_FB_PAYLOAD_LEN, out, 30U), 0U);
+    CHECK_EQ(trans_frame_build(TRANS_ID_GIMBAL_FB, payload,
+                               TRANS_GIMBAL_FB_PAYLOAD_LEN, out, 31U), 31U);
+    CHECK_EQ(trans_frame_build(TRANS_ID_GIMBAL_FB, payload, 65U, out, 80U), 0U);
+    CHECK_EQ(trans_frame_build(TRANS_ID_GIMBAL_FB, nullptr, 1U, out, 80U), 0U);
+    CHECK_EQ(trans_frame_build(TRANS_ID_GIMBAL_FB, nullptr, 0U, out, 80U), 6U);
+
+    trans_frame_t frame{};
+    CHECK_EQ(trans_frame_parser_feed(nullptr, 0U, &frame), 0U);
+    trans_frame_parser_t parser;
+    trans_frame_parser_init(&parser);
+    CHECK_EQ(trans_frame_parser_feed(&parser, 0xFFU, nullptr), 0U);
+}
+
+void test_chassis_six_axis()
+{
+    std::uint8_t payload[TRANS_CHASSIS_PAYLOAD_LEN];
+    const std::int32_t raw[6] = {-12345, 6789, 1111, -2222, 3333, -4444};
+    for (int i = 0; i < 6; i++)
+    {
+        const std::uint32_t v = static_cast<std::uint32_t>(raw[i]);
+        payload[i * 4 + 0] = static_cast<std::uint8_t>(v & 0xFFU);
+        payload[i * 4 + 1] = static_cast<std::uint8_t>((v >> 8U) & 0xFFU);
+        payload[i * 4 + 2] = static_cast<std::uint8_t>((v >> 16U) & 0xFFU);
+        payload[i * 4 + 3] = static_cast<std::uint8_t>((v >> 24U) & 0xFFU);
+    }
+
+    std::uint8_t frame[TRANS_FRAME_MAX_SIZE];
+    const std::uint16_t len = trans_frame_build(
+        TRANS_ID_CHASSIS_CMD, payload, sizeof(payload), frame, sizeof(frame));
+    CHECK_EQ(len, 30U);
+
+    trans_frame_parser_t parser;
+    trans_frame_parser_init(&parser);
+    const auto frames = feed_all(to_bytes(frame, len), &parser);
+    CHECK_EQ(frames.size(), 1U);
+    if (frames.size() == 1U)
+    {
+        trans_pc_chassis_t chassis{};
+        CHECK_EQ(trans_msg_parse_pc_chassis(&frames[0], &chassis, 1U), 1U);
+        CHECK_NEAR(chassis.vx_mps, -1.2345f, 1e-6);
+        CHECK_NEAR(chassis.vy_mps, -0.6789f, 1e-6);
+        CHECK_NEAR(chassis.vw_rps, 0.4444f, 1e-6);
+    }
+}
+
 void test_ringbuf()
 {
     std::uint8_t storage[8];
@@ -330,6 +424,10 @@ int main()
     test_build_matches_known_frames();
     test_parser_resync();
     test_message_limits();
+    test_yaw_unwrap();
+    test_freshness();
+    test_frame_build_limits();
+    test_chassis_six_axis();
     test_ringbuf();
     test_fuzz();
 

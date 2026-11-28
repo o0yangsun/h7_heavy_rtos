@@ -29,41 +29,12 @@ static trans_vision_cmd_t   s_vision;
 static trans_pc_chassis_t   s_pc_chassis;
 static volatile uint8_t     s_gimbal_mode = TRANS_GIMBAL_MODE_REPORT;
 
-static float    s_yaw_cont_deg;
-static float    s_last_yaw_deg;
-static uint8_t  s_yaw_cont_init;
-static float    s_pitch_deg;
-static float    s_yaw_vel_last_dps;
-static uint32_t s_yaw_vel_last_ms;
-static float    s_yaw_acc_lpf_dps2;
-
-static float trans_update_yaw_continuous(float yaw_deg)
-{
-    float delta;
-
-    if (s_yaw_cont_init == 0U)
-    {
-        s_yaw_cont_init = 1U;
-        s_yaw_cont_deg  = yaw_deg;
-        s_last_yaw_deg  = yaw_deg;
-        return yaw_deg;
-    }
-
-    delta = yaw_deg - s_last_yaw_deg;
-    while (delta > 180.0f)
-    {
-        delta -= 360.0f;
-    }
-    while (delta < -180.0f)
-    {
-        delta += 360.0f;
-    }
-
-    s_yaw_cont_deg += delta;
-    s_last_yaw_deg  = yaw_deg;
-
-    return s_yaw_cont_deg;
-}
+static trans_yaw_unwrap_t s_yaw_unwrap;
+static uint8_t            s_gimbal_was_online;
+static float              s_pitch_deg;
+static float              s_yaw_vel_last_dps;
+static uint32_t           s_yaw_vel_last_ms;
+static float              s_yaw_acc_lpf_dps2;
 
 static float trans_update_yaw_acc(float yaw_vel_dps, uint32_t now_ms)
 {
@@ -183,7 +154,7 @@ uint8_t trans_link_online(void)
         return 0U;
     }
 
-    return ((HAL_GetTick() - last) < TRANS_RX_TIMEOUT_MS) ? 1U : 0U;
+    return trans_msg_is_fresh(HAL_GetTick(), last, TRANS_RX_TIMEOUT_MS);
 }
 
 void trans_get_vision(trans_vision_cmd_t *out)
@@ -198,7 +169,7 @@ void trans_get_vision(trans_vision_cmd_t *out)
     taskEXIT_CRITICAL();
 
     if ((out->seq == 0U) || (out->valid == 0U) ||
-        ((HAL_GetTick() - out->tick_ms) >= TRANS_RX_TIMEOUT_MS))
+        (trans_msg_is_fresh(HAL_GetTick(), out->tick_ms, TRANS_RX_TIMEOUT_MS) == 0U))
     {
         out->valid = 0U;
     }
@@ -215,7 +186,8 @@ void trans_get_pc_chassis(trans_pc_chassis_t *out)
     *out = s_pc_chassis;
     taskEXIT_CRITICAL();
 
-    if ((out->valid == 0U) || ((HAL_GetTick() - out->tick_ms) >= TRANS_RX_TIMEOUT_MS))
+    if ((out->valid == 0U) ||
+        (trans_msg_is_fresh(HAL_GetTick(), out->tick_ms, TRANS_RX_TIMEOUT_MS) == 0U))
     {
         out->valid = 0U;
     }
@@ -244,9 +216,8 @@ void StartTransmissionTask(void const *argument)
     memset(&s_pc_chassis, 0, sizeof(s_pc_chassis));
     trans_frame_parser_init(&s_parser);
 
-    s_yaw_cont_init     = 0U;
-    s_yaw_cont_deg      = 0.0f;
-    s_last_yaw_deg      = 0.0f;
+    trans_yaw_unwrap_reset(&s_yaw_unwrap);
+    s_gimbal_was_online = 0U;
     s_pitch_deg         = 0.0f;
     s_yaw_vel_last_dps  = 0.0f;
     s_yaw_vel_last_ms   = 0U;
@@ -341,11 +312,17 @@ void StartTransmissionTask(void const *argument)
 
                 if (fdb.online[0] != false)
                 {
-                    yaw_deg = trans_update_yaw_continuous(fdb.yaw_deg);
+                    if (s_gimbal_was_online == 0U)
+                    {
+                        trans_yaw_unwrap_reset(&s_yaw_unwrap);
+                        s_gimbal_was_online = 1U;
+                    }
+                    yaw_deg = trans_yaw_unwrap_update(&s_yaw_unwrap, fdb.yaw_deg);
                 }
                 else
                 {
-                    yaw_deg = (s_yaw_cont_init != 0U) ? s_yaw_cont_deg : 0.0f;
+                    s_gimbal_was_online = 0U;
+                    yaw_deg = s_yaw_unwrap.continuous_deg;
                 }
 
                 if (fdb.online[1] != false)
@@ -398,7 +375,7 @@ void StartTransmissionTask(void const *argument)
                        (unsigned long)g_trans_diag.tx_0x24,
                        (unsigned long)g_trans_diag.tx_busy,
                        (unsigned long)g_trans_diag.ring_overflow,
-                       s_yaw_cont_deg,
+                       s_yaw_unwrap.continuous_deg,
                        s_pitch_deg,
                        (unsigned)s_gimbal_mode,
                        (unsigned)s_vision.mode);

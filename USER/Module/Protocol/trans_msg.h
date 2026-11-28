@@ -52,6 +52,22 @@ typedef struct
     uint8_t  valid;
 } trans_pc_chassis_t;
 
+typedef struct
+{
+    float   continuous_deg;
+    float   last_deg;
+    uint8_t initialized;
+} trans_yaw_unwrap_t;
+
+/** 复位连续 yaw；下一次 update 以输入角作为新起点 */
+void trans_yaw_unwrap_reset(trans_yaw_unwrap_t *u);
+
+/** 把 ±180° 的 yaw 展开为连续角，跨圈/反向均可 */
+float trans_yaw_unwrap_update(trans_yaw_unwrap_t *u, float yaw_deg);
+
+/** 判断时间戳是否在 timeout 内，处理 32 位回绕 */
+uint8_t trans_msg_is_fresh(uint32_t now_ms, uint32_t tick_ms, uint32_t timeout_ms);
+
 /**
  * @brief 解析 0x22 视觉指令
  * @return 1 = 长度/模式合法，字段已写入

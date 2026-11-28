@@ -57,6 +57,65 @@ static int32_t trans_msg_scale_deg(float value, float limit_deg)
     return (int32_t)lroundf(value * 1000.0f);
 }
 
+void trans_yaw_unwrap_reset(trans_yaw_unwrap_t *u)
+{
+    if (u == 0)
+    {
+        return;
+    }
+
+    u->continuous_deg = 0.0f;
+    u->last_deg       = 0.0f;
+    u->initialized    = 0U;
+}
+
+float trans_yaw_unwrap_update(trans_yaw_unwrap_t *u, float yaw_deg)
+{
+    float delta;
+
+    if (u == 0)
+    {
+        return 0.0f;
+    }
+    if (!isfinite(yaw_deg))
+    {
+        return u->continuous_deg;
+    }
+
+    if (u->initialized == 0U)
+    {
+        u->initialized    = 1U;
+        u->continuous_deg = yaw_deg;
+        u->last_deg       = yaw_deg;
+        return yaw_deg;
+    }
+
+    delta = yaw_deg - u->last_deg;
+    while (delta > 180.0f)
+    {
+        delta -= 360.0f;
+    }
+    while (delta < -180.0f)
+    {
+        delta += 360.0f;
+    }
+
+    u->continuous_deg += delta;
+    u->last_deg        = yaw_deg;
+
+    return u->continuous_deg;
+}
+
+uint8_t trans_msg_is_fresh(uint32_t now_ms, uint32_t tick_ms, uint32_t timeout_ms)
+{
+    if (timeout_ms == 0U)
+    {
+        return 0U;
+    }
+
+    return ((uint32_t)(now_ms - tick_ms) < timeout_ms) ? 1U : 0U;
+}
+
 uint8_t trans_msg_parse_vision(const trans_frame_t *f, trans_vision_cmd_t *out, uint32_t now_ms)
 {
     uint8_t mode;
