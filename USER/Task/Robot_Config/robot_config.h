@@ -19,10 +19,13 @@
 #define ENABLE_TRIGGER                  1   /* 拨弹电机，CAN2 */
 #define ENABLE_REFEREE                  0   /* 裁判系统 */
 #define ENABLE_SPECIAL                  0   /* 气泵和泄压阀 */
-#define ENABLE_TRANSMISSION             0   /* 上位机链路发送 */
+#define ENABLE_TRANSMISSION             1   /* 小电脑链路总开关 */
+#define TRANS_BACKEND_USB               1   /* 1：USB CDC，0：USART10 */
+#define TRANS_RX_ENABLE                 1   /* 解析小电脑下行帧 */
+#define TRANS_GIMBAL_MODE_REPORT        1U  /* 0x23 上报的 gimbal_mode：视觉联调固定 AUTO_AIM */
 #define ENABLE_RC_DBUS                  1   /* UART5 接收 DBUS */
 #define ENABLE_RC_DBUS_RX_INVERT        0   /* 0：外部反相，1：MCU 内部反相 */
-#define ENABLE_WIRELESS                 1   /* USART10 接收无线帧 */
+#define ENABLE_WIRELESS                 0   /* USART10 接收无线帧，USB 链路下关闭 */
 
 /******************************************
  * 2. 诊断打印

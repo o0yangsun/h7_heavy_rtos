@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    transmission_task.h
-  * @brief   上位机链路帧层：组帧、校验、超时和统计
+  * @brief   小电脑链路：BCP 帧收发、视觉指令快照与诊断
   ******************************************************************************
   */
 
@@ -14,38 +14,60 @@ extern "C" {
 
 #include <stdint.h>
 
-#define TRANS_SOF0              0xAAU
-#define TRANS_SOF1              0x55U
-#define TRANS_MAX_PAYLOAD       32U
-#define TRANS_OVERHEAD          5U      /**< 帧头(2) + cmd(1) + len(1) + crc8(1) */
+#include "trans_msg.h"
 
 typedef struct
 {
     uint32_t loop_cnt;
-    uint32_t tx_frames;
+    uint32_t rx_bytes;
     uint32_t rx_frames;
-    uint32_t rx_byte;
-    uint32_t crc_err;
+    uint32_t rx_0x12;
+    uint32_t rx_0x22;
+    uint32_t rx_0xf0;
+    uint32_t unknown_id;
+    uint32_t invalid_payload;
+    uint32_t checksum_errors;
+    uint32_t length_errors;
+    uint32_t address_errors;
+    uint32_t discarded_bytes;
+    uint32_t ring_overflow;
+    uint32_t tx_frames;
+    uint32_t tx_0x23;
+    uint32_t tx_0x24;
+    uint32_t tx_busy;
+    uint32_t tx_error;
     uint32_t last_rx_ms;
-    uint16_t last_cmd;
+    uint8_t  last_id;
+    uint8_t  last_len;
 } trans_diag_t;
 
 extern volatile trans_diag_t g_trans_diag;
 
-/** 由 usart_task 逐字节喂入 */
+/** 由 usart_task 逐字节喂入；ENABLE_WIRELESS=0 时不使用 */
 void trans_rx_byte(uint8_t b);
 
-/**
- * @brief 主动发一帧
- * @param cmd 命令字
- * @param data 载荷，可为 NULL
- * @param len 载荷长度，<= TRANS_MAX_PAYLOAD
- * @return 1 = 已发出
- */
-uint8_t trans_send(uint8_t cmd, const void *data, uint8_t len);
+/** 批量喂入接收字节，可在中断中调用 */
+void trans_rx_push(const uint8_t *buf, uint16_t len);
 
-/** 链路是否在线 */
+/**
+ * @brief 按 ID 发送一帧
+ * @return 1 = 已交给 USB；0 = 参数错误/USB 未就绪/忙
+ */
+uint8_t trans_send_frame(uint8_t id, const void *data, uint8_t len);
+
+/** 链路是否在线（收到任意合法帧） */
 uint8_t trans_link_online(void);
+
+/** 读视觉指令快照，valid 已按超时更新 */
+void trans_get_vision(trans_vision_cmd_t *out);
+
+/** 读小电脑底盘指令快照 */
+void trans_get_pc_chassis(trans_pc_chassis_t *out);
+
+/** 覆盖 0x23 上报的 gimbal_mode，范围 0~3 */
+void trans_set_gimbal_mode(uint8_t mode);
+
+void StartTransmissionTask(void const *argument);
 
 #ifdef __cplusplus
 }

@@ -54,3 +54,6 @@ Thumbs.db
 
 # Sampling logs
 logs/
+
+# Host test output
+tests/host/out/

@@ -250,8 +250,17 @@ typedef struct
 #define REFEREE_PERIOD_MS           10U
 
 /* -------------------------------- 传输参数 -------------------------------- */
-#define TRANS_PERIOD_MS             33U
-#define TRANS_TIMEOUT_MS            200U
+#define TRANS_TASK_PERIOD_MS            1U
+#define TRANS_GIMBAL_FB_PERIOD_MS       10U      /* 0x23，小电脑超时 150 ms */
+#define TRANS_SHOOT_STATUS_PERIOD_MS    100U     /* 0x24，小电脑超时 200 ms */
+#define TRANS_RX_TIMEOUT_MS             150U     /* 下行帧失效时间，与 PC vision_timeout 对齐 */
+#define TRANS_RX_DRAIN_MAX              128U     /* 单圈最多处理的字节数 */
+#define TRANS_RX_RING_SIZE              512U     /* USB 接收环形缓冲，必须是 2 的幂 */
+
+#define TRANS_YAW_VEL_LIMIT_DPS         720.0f   /* 小电脑侧限幅 */
+#define TRANS_YAW_ACC_LIMIT_DPS2        20000.0f
+#define TRANS_PITCH_LIMIT_DEG           60.0f
+#define TRANS_YAW_ACC_LPF_ALPHA         0.2f
 
 /* ------------------------------ 特殊机构参数 ------------------------------ */
 #define SPECIAL_PERIOD_MS           20U
